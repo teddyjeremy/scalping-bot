@@ -12,6 +12,7 @@ jobs:
   smoke-test:
     if: github.event.head_commit.message == 'Run v3 publisher integration smoke test'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
