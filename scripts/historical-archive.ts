@@ -179,13 +179,12 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
     while (!source.complete && source.pages < MAX_PAGES) {
       const page = await rpc("getSignaturesForAddress(source)", c => c.getSignaturesForAddress(new PublicKey(address), { limit: 100, ...(source.before ? { before: source.before } : {}) }, "confirmed"));
       if (!page.length) { source.complete = true; break; }
-      let reachedLaunchBoundary = false;
+      const ordered = [...page].reverse();
+      const reachedLaunchBoundary = ordered.some(item => item.blockTime != null && item.blockTime < record.blockTime);
+      const candidates = ordered.filter(item => item.blockTime != null && item.blockTime >= record.blockTime && item.blockTime <= until);
+      const hydrated = await Promise.all(candidates.map(async item => ({ item, tx: await fetchTx(item.signature) })));
       const lines: string[] = [];
-      for (const item of [...page].reverse()) {
-        if (item.blockTime == null) continue;
-        if (item.blockTime < record.blockTime) { reachedLaunchBoundary = true; continue; }
-        if (item.blockTime > until) continue;
-        const tx = await fetchTx(item.signature);
+      for (const { item, tx } of hydrated) {
         if (!tx?.meta || tx.meta.err) continue;
         const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, instructions(tx));
         for (const event of decoded) {
