@@ -72,10 +72,13 @@ function keyString(value: unknown): string {
   return String(value ?? "");
 }
 function instructions(tx: ParsedTransactionWithMeta) {
-  const topLevel = tx.transaction.message.instructions.map(ix => {
-    const item = ix as unknown as { programId?: unknown; data?: unknown; accounts?: unknown[] };
+  const convert = (ix: unknown) => {
+    const item = ix as { programId?: unknown; data?: unknown; accounts?: unknown[] };
     return { programId: keyString(item.programId), data: item.data, accounts: Array.isArray(item.accounts) ? item.accounts.map(keyString) : [] };
-  });
+  };
+  const topLevel = tx.transaction.message.instructions.map(convert);
+  const inner = (tx.meta?.innerInstructions ?? []).flatMap(group => group.instructions.map(convert));
+  return [...topLevel, ...inner];
 }
 async function fetchTx(signature: string): Promise<ParsedTransactionWithMeta | null> {
   return rpc("getParsedTransaction", connection => connection.getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }));
