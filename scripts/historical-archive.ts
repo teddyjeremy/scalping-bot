@@ -141,15 +141,15 @@ let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tr
 let saveQueue: Promise<void> = Promise.resolve();
 let uploadQueue: Promise<void> = Promise.resolve();
 const dirtyFiles = new Set<string>();
-function queueDirtyFile(file: string) { dirtyFiles.add(path.relative(process.cwd(), file).replaceAll(path.sep, "/")); }
+function queueDirtyFile(file: string) { dirtyFiles.add(path.relative(path.resolve(ROOT), path.resolve(file)).replaceAll(path.sep, "/")); }
 async function uploadDirtyFiles() {
   const run = uploadQueue.then(async () => {
     const files = [...dirtyFiles];
     if (files.length) {
-      execFileSync("python", ["scripts/hf-dataset-sync.py", "upload-batch", ...files], { stdio: "inherit" });
+      execFileSync("python", ["scripts/hf-dataset-v3-sync.py", "publish-batch", ...files], { stdio: "inherit" });
       for (const file of files) dirtyFiles.delete(file);
     } else {
-      execFileSync("python", ["scripts/hf-dataset-sync.py", "upload-checkpoint"], { stdio: "inherit" });
+      execFileSync("python", ["scripts/hf-dataset-v3-sync.py", "publish-batch"], { stdio: "inherit" });
     }
   });
   uploadQueue = run.catch(() => undefined);
