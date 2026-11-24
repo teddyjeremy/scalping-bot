@@ -31,7 +31,7 @@ const nextRpc = () => rpc[(rpcCursor++) % rpc.length];
 
 type TokenMetrics = {
   tradeCount: number; buyCount: number; sellCount: number;
-  volumeSol: number; volumeUsd: number;
+  volumeSol: number; volumeUsd: number; volumeQuote: number;
   uniqueBuyers: string[]; uniqueSellers: string[];
   firstPriceSol: number | null; firstPriceUsd: number | null;
   lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
@@ -40,7 +40,7 @@ type TokenMetrics = {
   maxDrawdownPct: number | null;
   timeToTargetsSeconds: Record<string, number | null>;
   largestBuySol: number;
-  largestSellSol: number;
+  largestSellSol: number; largestBuyQuote: number; largestSellQuote: number;
   priceSource?: string;
   curveRealSolReserves?: number | null;
   curveRealTokenReserves?: number | null;
@@ -119,12 +119,12 @@ async function getSolUsd(): Promise<number | null> {
 }
 function ensureMetrics(item: TokenState): TokenMetrics {
   item.metrics ??= {
-    tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0,
+    tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0, volumeQuote: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
     lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null,
     snapshotsRecorded: [], maxDrawdownPct: null,
     timeToTargetsSeconds: { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null },
-    largestBuySol: 0, largestSellSol: 0
+    largestBuySol: 0, largestSellSol: 0, largestBuyQuote: 0, largestSellQuote: 0
   };
   return item.metrics;
 }
@@ -280,9 +280,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), totalSupply: supply,
       priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
-      volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
+      volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd, volumeQuote: metrics.volumeQuote,
+      tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
       maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
-      largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol,
+      largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
       uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
       priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
       pricingMethod: metrics.priceSource ?? "owner_balance_delta_estimate",
@@ -308,12 +309,17 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const metrics = ensureMetrics(item);
   for (const trade of observations) {
     metrics.tradeCount++;
+    metrics.volumeQuote += trade.quoteAmount;
     if (trade.side === "buy") {
       metrics.buyCount++;
       if (!metrics.uniqueBuyers.includes(trade.wallet)) metrics.uniqueBuyers.push(trade.wallet);
+      metrics.largestBuyQuote = Math.max(metrics.largestBuyQuote, trade.quoteAmount);
+      metrics.largestBuySol = Math.max(metrics.largestBuySol, trade.solAmount);
     } else {
       metrics.sellCount++;
       if (!metrics.uniqueSellers.includes(trade.wallet)) metrics.uniqueSellers.push(trade.wallet);
+      metrics.largestSellQuote = Math.max(metrics.largestSellQuote, trade.quoteAmount);
+      metrics.largestSellSol = Math.max(metrics.largestSellSol, trade.solAmount);
     }
     metrics.volumeSol += trade.solAmount;
     if (trade.priceUsd != null && trade.quoteMint !== "So11111111111111111111111111111111111111112") metrics.volumeUsd += trade.quoteAmount * trade.priceUsd / trade.priceQuote;
@@ -328,7 +334,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     quoteMint, quoteSymbol: metrics.quoteSymbol ?? null,
     tradeVolumeQuote: observations.reduce((sum, trade) => sum + trade.quoteAmount, 0),
     tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
-    volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
+    volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd, volumeQuote: metrics.volumeQuote,
+    largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
+    tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
     lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
     marketCapQuote: marketCap(latest.priceQuote, item.supplyUi ?? null),
