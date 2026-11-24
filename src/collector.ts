@@ -1062,13 +1062,13 @@ async function main() {
     await captureMint(item);
   }
   for (const item of activeTokens) await backfillActiveMintActivity(item);
-  const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
+  const discovery = nextRpc();
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
     if (shuttingDown || logs.err || !CREATE_LOG.test(logs.logs.join("\n"))) return;
     await handleLiveLaunch(logs.signature, logs, context.slot);
   }, "confirmed");
   discoverySubscription = { connection: discovery, id };
-  const launchLabDiscovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
+  const launchLabDiscovery = nextRpc();
   const stonkId = await launchLabDiscovery.onLogs(LAUNCHLAB_PROGRAM, async (logs, context) => {
     if (shuttingDown || logs.err || !STONK_LAUNCH_LOG.test(logs.logs.join("\n"))) return;
     await handleLiveStonkLaunch(logs.signature, logs, context.slot);
