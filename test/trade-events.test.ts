@@ -22,7 +22,11 @@ test("decodes current Pump TradeEvent with quote amount and fee components", () 
   u8(1); u64(0); u64(0); u64(0); i64(1_800_000_000n); str("buy"); u8(0);
   u64(0); u64(0); u64(0); u64(0); u32(0); pubkey(5); u64(11_000_000_000n);
   u64(500); u64(400); u64(0); u64(0); u64(0);
-  const result = decodeProgramTradeEvents(["Program data: " + data().toString("base64")], key(1));
+  const result = decodeProgramTradeEvents([
+    "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+    "Program data: " + data().toString("base64"),
+    "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+  ], key(1));
   assert.equal(result.length, 1);
   assert.equal(result[0].venue, "pumpfun");
   assert.equal(result[0].user, key(2));
@@ -53,7 +57,12 @@ test("decodes PumpSwap buy and sell events with user quote amounts", () => {
     u64(25); u64(4); u64(1); u64(1); u64(2); u64(2); i128(30n); u8(1); u64(1000); u64(0); u64(0); u64(0);
     return data();
   };
-  const logs = ["Program data: " + makeBuy().toString("base64"), "Program data: " + makeSell().toString("base64")];
+  const logs = [
+    "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA invoke [1]",
+    "Program data: " + makeBuy().toString("base64"),
+    "Program data: " + makeSell().toString("base64"),
+    "Program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA success"
+  ];
   const result = decodeProgramTradeEvents(logs, "target-mint");
   assert.equal(result.length, 2);
   assert.equal(result[0].venue, "pumpswap");
