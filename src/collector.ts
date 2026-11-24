@@ -115,7 +115,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -223,7 +223,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
@@ -642,9 +642,12 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
         tradeFeeBase: event.tradeFeeMint === item.mint ? baseFeeUi(event.tradeFeeRaw ?? null) : null,
         tradeFeeMint: event.tradeFeeMint ?? null, creatorFeeMint: event.creatorFeeMint ?? null,
         venueTradeFeeQuote: event.venueTradeFeeMint === quoteMint ? feeUi(event.venueTradeFeeRaw ?? null) : null,
+        venueTradeFeeBase: event.venueTradeFeeMint === item.mint ? baseFeeUi(event.venueTradeFeeRaw ?? null) : null,
         venueTradeFeeMint: event.venueTradeFeeMint ?? null,
         inputTransferFeeQuote: event.side === "buy" ? feeUi(event.inputTransferFeeRaw ?? null) : null,
         outputTransferFeeQuote: event.side === "sell" ? feeUi(event.outputTransferFeeRaw ?? null) : null,
+        inputTransferFeeBase: event.side === "sell" ? baseFeeUi(event.inputTransferFeeRaw ?? null) : null,
+        outputTransferFeeBase: event.side === "buy" ? baseFeeUi(event.outputTransferFeeRaw ?? null) : null,
         inputTransferFeeRaw: event.inputTransferFeeRaw?.toString() ?? null,
         outputTransferFeeRaw: event.outputTransferFeeRaw?.toString() ?? null,
         cashbackFeeQuote: feeUi(event.cashbackRaw), buybackFeeQuote: feeUi(event.buybackFeeRaw),
