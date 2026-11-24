@@ -43,7 +43,8 @@ export function findPumpCreateInstructions(
     if (!kind) continue;
     const mintAccount = instruction.accounts[0];
     if (!mintAccount) continue;
-    const creator = instruction.accounts[5] ? String(instruction.accounts[5]) : null;
+    const creatorIndex = kind === "create_v2" ? 5 : 7;
+    const creator = instruction.accounts[creatorIndex] ? String(instruction.accounts[creatorIndex]) : null;
     found.push({ mint: String(mintAccount), creator, kind });
   }
   return found;
