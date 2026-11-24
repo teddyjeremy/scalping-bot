@@ -16,4 +16,19 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npm run typecheck
+      - name: Typecheck
+        id: typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        id: tests
+        run: npm test
+      - name: Publish preflight verification
+        if: github.event_name == 'push'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ndeda/solana-scalping-data
+          VERIFICATION_STAGE: preflight
+          JOB_STATUS: ${{ job.status }}
+          TYPECHECK_STATUS: ${{ steps.typecheck.outcome }}
+          UNIT_TEST_STATUS: ${{ steps.tests.outcome }}
+        run: node scripts/publish-ci-status.mjs
