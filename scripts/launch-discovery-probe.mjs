@@ -37,7 +37,11 @@ function summarize(result) {
     mint: item.mint ?? item.address ?? item.baseMint ?? null,
     createdAt: item.created_timestamp ?? item.createAt ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
     creator: item.creator ?? item.creatorAddress ?? null,
-    pool: item.pool ?? item.poolId ?? item.id ?? null
+    pool: item.pool ?? item.poolId ?? item.id ?? null,
+    platformInfo: item.platformInfo ?? null,
+    configInfo: item.configInfo ?? null,
+    mintB: item.mintB ?? null,
+    migrateType: item.migrateType ?? null
   } : null;
   const data = result.body?.data ?? result.body;
   return {
@@ -52,6 +56,15 @@ const results = [];
 for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.name, probe.url)));
 
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
+const raydiumBaseParams = "sort=new&size=100&mintType=default&includeNsfw=false";
+for (const [label, platformId] of [
+  ["stonkfun_reward_config_filter", "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt"],
+  ["stonkfun_standard_config_filter", "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"]
+]) {
+  const response = await requestJson(label, `${raydiumBase}?platformId=${platformId}&${raydiumBaseParams}`);
+  results.push(summarize(response));
+}
+
 const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
 const targetStartMs = Date.parse("2026-11-01T00:00:00Z");
 let nextPageId = null;
@@ -75,12 +88,13 @@ for (let page = 1; page <= 60; page++) {
 }
 
 const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
-const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_") && r.ok && r.rowCount > 0);
+const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_new_page_") && r.ok && r.rowCount > 0);
 const raydiumDates = raydiumPages.flatMap(r => [r.first?.createdAt, r.last?.createdAt]).filter(Number.isFinite);
+const platformFilterResults = results.filter(r => r.name.startsWith("stonkfun_"));
 
 const report = {
   generatedAt: new Date().toISOString(),
-  purpose: "Read-only launch-index pagination and historical boundary probe; no Helius calls and no dataset writes.",
+  purpose: "Read-only launch-index pagination, historical boundary and StonkFun platform-filter probe; no Helius calls and no dataset writes.",
   historicalCollectionStarted: false,
   datasetWritten: false,
   pumpOffsetsTested: pumpOffsets,
@@ -89,6 +103,7 @@ const report = {
   raydiumEarliestObservedCreateAt: raydiumDates.length ? Math.min(...raydiumDates) : null,
   raydiumLatestObservedCreateAt: raydiumDates.length ? Math.max(...raydiumDates) : null,
   raydiumReachedNovember1Boundary: raydiumReachedTargetStart,
+  stonkfunPlatformFilterRows: Object.fromEntries(platformFilterResults.map(r => [r.name, r.rowCount])),
   checks: {
     pumpfunIndexReturnsRows: pumpHasRows,
     raydiumLaunchLabIndexReturnsRows: raydiumPages.length > 0,
