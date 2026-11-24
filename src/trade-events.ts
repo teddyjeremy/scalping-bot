@@ -60,6 +60,8 @@ export type DecodedProgramTrade = {
   realQuoteReservesRaw: bigint | null;
   tradeFeeRaw?: bigint;
   tradeFeeMint?: string;
+  venueTradeFeeRaw?: bigint;
+  venueTradeFeeMint?: string;
   creatorFeeMint?: string;
   inputTransferFeeRaw?: bigint;
   outputTransferFeeRaw?: bigint;
