@@ -385,6 +385,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
   await recordDueSnapshots(item, Date.now());
+  await runPaperStrategy(item);
   await persistState();
 }
 async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds: number, slot: number | null) {
@@ -747,6 +748,11 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.inputTransferFeeQuote != null) metrics.inputTransferFeesQuote = (metrics.inputTransferFeesQuote ?? 0) + trade.inputTransferFeeQuote;
     if (trade.outputTransferFeeQuote != null) metrics.outputTransferFeesQuote = (metrics.outputTransferFeesQuote ?? 0) + trade.outputTransferFeeQuote;
     const profile = metrics.walletProfiles[trade.wallet];
+    metrics.recentTradeSignals!.push({
+      at: observedAt, side: trade.side, quoteAmount: trade.quoteAmount, wallet: trade.wallet,
+      isCreator: profile.creator || profile.launchFeePayer, botScore: profile.botScore, confidence: trade.confidence
+    });
+    metrics.recentTradeSignals = metrics.recentTradeSignals!.filter(signal => observedAt - signal.at <= 120_000).slice(-500);
     await appendTokenEvent(item.mint, {
       schemaVersion: 7, kind: "wallet_activity", mint: item.mint, signature, slot, blockTime: tx.blockTime,
       wallet: trade.wallet, side: trade.side, tokenAmount: trade.tokenAmount, quoteAmount: trade.quoteAmount,
@@ -856,6 +862,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   metrics.processedTradeSignatures!.push(signature);
   if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
   await recordDueSnapshots(item, historicalReplay ? observedAt : Date.now(), historicalReplay);
+  if (!historicalReplay) await runPaperStrategy(item);
   await persistState();
   return true;
 }
@@ -1746,6 +1753,44 @@ async function watchDiscoveryCandidate(item: TokenState) {
     discoverySubscriptions.set(item.mint, { connection, id: -1, timer: timer as unknown as NodeJS.Timeout });
   }
 }
+async function runPaperStrategy(item: TokenState) {
+  if (!item.detailedCaptureStarted || !item.metrics) return;
+  const metrics = ensureMetrics(item);
+  const now = Date.now();
+  const quoteMint = metrics.quoteMint ?? item.quoteMint ?? WRAPPED_SOL_MINT;
+  const quoteUsd = await quoteUsdValue(quoteMint);
+  const priceUsd = metrics.lastPriceUsd ?? (metrics.lastPriceQuote != null && quoteUsd != null ? metrics.lastPriceQuote * quoteUsd : null);
+  const fdvUsd = priceUsd != null && item.supplyUi != null ? priceUsd * item.supplyUi : item.fdvUsdAtScreen ?? null;
+  const realQuote = metrics.curveRealQuoteReserves ?? metrics.launchlabRealQuote ?? null;
+  const virtualQuote = metrics.curveVirtualQuoteReserves ?? null;
+  const quoteLiquidityUsd = realQuote != null && quoteUsd != null ? realQuote * quoteUsd : null;
+  const reserveUsd = quoteLiquidityUsd;
+  const reserveDropPct = reserveUsd != null && metrics.lastRealQuoteReserveUsd != null && metrics.lastRealQuoteReserveUsd > 0
+    ? (reserveUsd / metrics.lastRealQuoteReserveUsd - 1) * 100 : null;
+  const priceImpactPctForOneDollar = virtualQuote != null && virtualQuote > 0 && quoteUsd != null && quoteUsd > 0
+    ? (1 / quoteUsd) / (virtualQuote + (1 / quoteUsd)) * 100 : null;
+  const recentTrades = (metrics.recentTradeSignals ?? []).filter(trade => now - trade.at <= 120_000);
+  const creatorSelling = recentTrades.some(trade => trade.isCreator === true && trade.side === "sell");
+  const decision = evaluateScalpDecision({
+    now, launchAt: item.firstSeenAt, price: priceUsd, fdvUsd, quoteLiquidity: quoteLiquidityUsd,
+    recentTrades, creatorSelling, reserveDropPct, priceImpactPctForOneDollar,
+    securityPassed: item.discoveryStatus === "eligible", fdvMinUsd: 5_000, fdvMaxUsd: 10_000,
+    entryStartSeconds: 30, entryEndSeconds: 300, paperSizeUsd: 1
+  }, item.paperPosition);
+  metrics.lastRealQuoteReserveUsd = reserveUsd;
+  if (decision.position) item.paperPosition = decision.position;
+  if (decision.action === "enter" || decision.action === "exit" || decision.action === "reject") {
+    item.paperLastDecisionAt = now;
+    await appendTokenEvent(item.mint, {
+      schemaVersion: 1, kind: "paper_strategy_decision", strategyVersion: "baseline-v1",
+      mint: item.mint, venue: item.venue, action: decision.action, score: decision.score,
+      reasons: decision.reasons, dangerSignals: decision.dangerSignals,
+      launchAgeSeconds: (now - item.firstSeenAt) / 1000, fdvUsd, priceUsd,
+      quoteLiquidityUsd, priceImpactPctForOneDollar, reserveDropPct,
+      paperPosition: item.paperPosition ?? null, liveTransactionSubmitted: false, observedAt: now
+    });
+  }
+}
 async function processLaunch(signature: string, slot: number, logs: string[], tx: ParsedTransactionWithMeta) {
   if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err || !isCreateTransaction(tx)) return;
   const mints = createdPumpMints(tx);
@@ -2051,6 +2096,7 @@ async function shutdown(reason: string) {
     try { await stonkDiscoverySubscription.connection.removeOnLogsListener(stonkDiscoverySubscription.id); } catch {}
   }
   await Promise.all([...activeSubscriptions.keys()].map(stopCapture));
+  await Promise.all([...discoverySubscriptions.keys()].map(stopDiscoveryWatch));
   if (reconciliation) await reconciliation;
   if (stonkReconciliation) await stonkReconciliation;
   await persistState();
@@ -2066,10 +2112,16 @@ async function main() {
   await restoreTokenEvents(activeTokens.map(item => ({ mint: item.mint, venue: item.venue })));
   await retryPendingActivityTransactions();
   for (const item of activeTokens) {
-    await loadActivitySignatures(item);
-    await captureMint(item);
+    if (item.detailedCaptureStarted || item.discoveryStatus === "eligible") {
+      item.detailedCaptureStarted = true;
+      await loadActivitySignatures(item);
+      await captureMint(item);
+    } else {
+      item.discoveryStatus ??= "pending";
+      await watchDiscoveryCandidate(item);
+    }
   }
-  for (const item of activeTokens) await backfillActiveMintActivity(item);
+  for (const item of activeTokens.filter(token => token.detailedCaptureStarted)) await backfillActiveMintActivity(item);
   const discovery = nextRpc();
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
     if (shuttingDown || logs.err || !CREATE_LOG.test(logs.logs.join("\n"))) return;
