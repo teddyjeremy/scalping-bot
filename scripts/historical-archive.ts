@@ -46,9 +46,9 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   }
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; processedSignatures: string[]; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; processedSignatures: string[]; tradeCursors?: Record<string, { before?: string; complete: boolean; pages: number }>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
-let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, processedSignatures: [], launches: {} };
+let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, processedSignatures: [], tradeCursors: {}, launches: {} };
 async function save() {
   await mkdir(ROOT, { recursive: true });
   const temp = cursorPath + ".tmp";
@@ -61,6 +61,7 @@ async function load() {
     const parsed = JSON.parse(await readFile(cursorPath, "utf8")) as Cursor;
     if (parsed.schemaVersion !== 1 || parsed.start !== START || parsed.end !== END || !parsed.programs || !parsed.launches) throw new Error("Checkpoint schema/date range mismatch");
     state = parsed;
+    state.tradeCursors ??= {};
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -147,46 +148,44 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   const file = path.join(ROOT, "trades", record.venue, record.mint + ".jsonl");
   await mkdir(path.dirname(file), { recursive: true });
   const until = record.blockTime + CAPTURE_SECONDS;
-  let before: string | undefined;
-  let scanned = 0;
-  const seen = new Set<string>();
-  while (scanned < 1000) {
-    const page = await rpc("getSignaturesForAddress(mint)", c => c.getSignaturesForAddress(new PublicKey(record.mint), { limit: 100, ...(before ? { before } : {}) }, "confirmed"));
-    if (!page.length) break;
-    let olderThanLaunch = false;
+  const progress = state.tradeCursors![record.mint] ?? { complete: false, pages: 0 };
+  while (!progress.complete && progress.pages < MAX_PAGES) {
+    const page = await rpc("getSignaturesForAddress(mint)", c => c.getSignaturesForAddress(new PublicKey(record.mint), { limit: 100, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
+    if (!page.length) { progress.complete = true; break; }
+    let reachedLaunchBoundary = false;
+    const lines: string[] = [];
     for (const item of [...page].reverse()) {
       if (item.blockTime == null) continue;
-      if (item.blockTime < record.blockTime) { olderThanLaunch = true; continue; }
-      if (item.blockTime > until || seen.has(item.signature)) continue;
+      if (item.blockTime < record.blockTime) { reachedLaunchBoundary = true; continue; }
+      if (item.blockTime > until) continue;
       const tx = await fetchTx(item.signature);
       if (!tx?.meta || tx.meta.err) continue;
       const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, instructions(tx));
-      for (const event of decoded) {
-        const line = {
-          schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
-          launchSignature: record.signature, signature: item.signature, slot: item.slot,
-          blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
-          side: event.side, user: event.user, tokenAmountRaw: event.tokenAmountRaw.toString(),
-          quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(),
-          protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
-          platformFeeRaw: event.platformFeeRaw?.toString() ?? null,
-          lpFeeRaw: event.lpFeeRaw?.toString() ?? null, creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
-          shareFeeRaw: event.shareFeeRaw?.toString() ?? null, transactionFeeLamports: tx.meta.fee,
-          computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
-          preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
-          preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
-          reserveEvidence: { virtualQuoteReservesRaw: event.virtualQuoteReservesRaw?.toString() ?? null, realQuoteReservesRaw: event.realQuoteReservesRaw?.toString() ?? null, preTradeBaseReserveRaw: event.preTradeBaseReserveRaw?.toString() ?? null, preTradeQuoteReserveRaw: event.preTradeQuoteReserveRaw?.toString() ?? null },
-          dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null }
-        };
-        await appendFile(file, JSON.stringify(line) + "\n");
-      }
-      seen.add(item.signature);
+      for (const event of decoded) lines.push(JSON.stringify({
+        schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
+        launchSignature: record.signature, signature: item.signature, slot: item.slot,
+        blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
+        side: event.side, user: event.user, tokenAmountRaw: event.tokenAmountRaw.toString(),
+        quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(),
+        protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
+        platformFeeRaw: event.platformFeeRaw?.toString() ?? null,
+        lpFeeRaw: event.lpFeeRaw?.toString() ?? null, creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
+        shareFeeRaw: event.shareFeeRaw?.toString() ?? null, transactionFeeLamports: tx.meta.fee,
+        computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
+        preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
+        preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
+        reserveEvidence: { virtualQuoteReservesRaw: event.virtualQuoteReservesRaw?.toString() ?? null, realQuoteReservesRaw: event.realQuoteReservesRaw?.toString() ?? null, preTradeBaseReserveRaw: event.preTradeBaseReserveRaw?.toString() ?? null, preTradeQuoteReserveRaw: event.preTradeQuoteReserveRaw?.toString() ?? null },
+        dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null }
+      }));
     }
-    scanned += page.length;
-    before = page[page.length - 1].signature;
-    if (olderThanLaunch || page.length < 100) break;
+    if (lines.length) await appendFile(file, lines.join("\n") + "\n");
+    progress.before = page[page.length - 1].signature;
+    progress.pages++;
+    if (reachedLaunchBoundary || page.length < 100) progress.complete = true;
+    state.tradeCursors![record.mint] = progress;
+    await save();
   }
-  return scanned;
+  return progress.complete;
 }
 async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
@@ -194,13 +193,9 @@ async function main() {
   console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission.`);
   await scanProgram(PUMP, "pumpfun");
   await scanProgram(LAUNCHLAB, "stonkfun");
-  const completed = readFile(path.join(ROOT, "trade-capture-checkpoint.json"), "utf8").then(x => JSON.parse(x) as Record<string, boolean>).catch(() => ({}));
-  const done = await completed;
   for (const record of Object.values(state.launches)) {
-    if (done[record.mint]) continue;
+    if (state.tradeCursors?.[record.mint]?.complete) continue;
     await collectMintTrades(record);
-    done[record.mint] = true;
-    await writeFile(path.join(ROOT, "trade-capture-checkpoint.json"), JSON.stringify(done, null, 2));
   }
   console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete])))}`);
 }
