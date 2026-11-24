@@ -574,7 +574,8 @@ async function recordTransactionFeeMetrics(item: TokenState, tx: ParsedTransacti
     feeModelNote: "Base signature fee is estimated at 5000 lamports per required signer; remainder is an estimated priority fee and may include other fee components."
   });
 }
-async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true, historicalReplay = false) {
+async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true, historicalReplay = false, replayObservedAt?: number) {
+  if (tx.meta?.err) { await recordTransactionFeeMetrics(item, tx, signature, slot); await persistState(); return; }
   const allInstructions = allTransactionInstructions(tx);
   let migrationDetected = false;
   if (item.venue === "stonkfun") {
@@ -680,7 +681,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   }
   if (observations.length === 0) return;
 
-  const observedAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
+  const observedAt = replayObservedAt ?? (tx.blockTime ? tx.blockTime * 1000 : Date.now());
   for (const trade of observations) {
     const fundingSources = extractFundingSources(tx, trade.wallet);
     metrics.walletProfiles[trade.wallet] = updateWalletProfile(metrics.walletProfiles[trade.wallet], { ...trade, confidence: trade.confidence }, {
