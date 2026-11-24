@@ -1,6 +1,9 @@
 import type { ParsedTransactionWithMeta } from "@solana/web3.js";
 
 type TokenBalance = NonNullable<NonNullable<ParsedTransactionWithMeta["meta"]>["preTokenBalances"]>[number];
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
 function uiAmount(balance: TokenBalance | undefined): number {
   if (!balance) return 0;
@@ -13,32 +16,46 @@ export type TradeObservation = {
   wallet: string;
   side: "buy" | "sell";
   tokenAmount: number;
+  quoteMint: string;
+  quoteAmount: number;
+  priceQuote: number;
   solAmount: number;
-  priceSol: number;
+  priceSol: number | null;
   priceUsd: number | null;
   feeLamports: number;
   pricingMethod: "owner_balance_delta_estimate";
-  confidence: "low" | "medium";
+  confidence: "low";
 };
 
 /**
- * Estimates executed price by matching each token owner's token delta with
- * that owner's native SOL balance delta. Rent, unrelated transfers, wrapped
- * SOL routing and multi-leg swaps can distort this estimate; consumers must
- * retain the method/confidence labels and prefer venue-specific decoders.
+ * Estimates a wallet's quote-asset spend/receipt by pairing its base-token delta
+ * with its quote-token delta (or native SOL delta for SOL curves). This is only
+ * supporting evidence: routed swaps, fees, rent, account creation and unrelated
+ * transfers can distort per-owner deltas. Never use as an execution quote.
  */
 export function deriveTradeObservations(
   tx: ParsedTransactionWithMeta,
   mint: string,
-  solUsd: number | null
+  solUsd: number | null,
+  quoteMint = SOL_MINT
 ): TradeObservation[] {
   if (!tx.meta || tx.meta.err) return [];
-  const pre = new Map<string, TokenBalance>();
-  const post = new Map<string, TokenBalance>();
-  for (const b of tx.meta.preTokenBalances ?? []) if (b.mint === mint && b.owner) pre.set(b.owner, b);
-  for (const b of tx.meta.postTokenBalances ?? []) if (b.mint === mint && b.owner) post.set(b.owner, b);
+  const preBase = new Map<string, TokenBalance>();
+  const postBase = new Map<string, TokenBalance>();
+  const preQuote = new Map<string, TokenBalance>();
+  const postQuote = new Map<string, TokenBalance>();
+  for (const b of tx.meta.preTokenBalances ?? []) {
+    if (!b.owner) continue;
+    if (b.mint === mint) preBase.set(b.owner, b);
+    if (b.mint === quoteMint) preQuote.set(b.owner, b);
+  }
+  for (const b of tx.meta.postTokenBalances ?? []) {
+    if (!b.owner) continue;
+    if (b.mint === mint) postBase.set(b.owner, b);
+    if (b.mint === quoteMint) postQuote.set(b.owner, b);
+  }
 
-  const owners = new Set([...pre.keys(), ...post.keys()]);
+  const owners = new Set([...preBase.keys(), ...postBase.keys()]);
   const accountKeys = tx.transaction.message.accountKeys.map(k =>
     typeof k === "string" ? k : String(k.pubkey)
   );
@@ -47,29 +64,39 @@ export function deriveTradeObservations(
   const out: TradeObservation[] = [];
 
   for (const wallet of owners) {
-    const tokenDelta = uiAmount(post.get(wallet)) - uiAmount(pre.get(wallet));
+    const tokenDelta = uiAmount(postBase.get(wallet)) - uiAmount(preBase.get(wallet));
     if (!Number.isFinite(tokenDelta) || Math.abs(tokenDelta) < 1e-12) continue;
-    const accountIndex = accountKeys.indexOf(wallet);
-    if (accountIndex < 0) continue;
-    const beforeLamports = tx.meta.preBalances?.[accountIndex];
-    const afterLamports = tx.meta.postBalances?.[accountIndex];
-    if (beforeLamports == null || afterLamports == null) continue;
-    let solDelta = (afterLamports - beforeLamports) / 1e9;
-    if (wallet === feePayer) solDelta += feeLamports / 1e9;
-    if (!Number.isFinite(solDelta) || Math.abs(solDelta) < 1e-9) continue;
-    if (Math.sign(tokenDelta) === Math.sign(solDelta)) continue;
+    let quoteDelta: number;
+    if (quoteMint === SOL_MINT) {
+      const accountIndex = accountKeys.indexOf(wallet);
+      if (accountIndex < 0) continue;
+      const before = tx.meta.preBalances?.[accountIndex];
+      const after = tx.meta.postBalances?.[accountIndex];
+      if (before == null || after == null) continue;
+      quoteDelta = (after - before) / 1e9;
+      if (wallet === feePayer) quoteDelta += feeLamports / 1e9;
+    } else {
+      quoteDelta = uiAmount(postQuote.get(wallet)) - uiAmount(preQuote.get(wallet));
+    }
+    if (!Number.isFinite(quoteDelta) || Math.abs(quoteDelta) < 1e-12) continue;
+    if (Math.sign(tokenDelta) === Math.sign(quoteDelta)) continue;
 
     const tokenAmount = Math.abs(tokenDelta);
-    const solAmount = Math.abs(solDelta);
-    const priceSol = solAmount / tokenAmount;
-    if (!Number.isFinite(priceSol) || priceSol <= 0) continue;
+    const quoteAmount = Math.abs(quoteDelta);
+    const priceQuote = quoteAmount / tokenAmount;
+    if (!Number.isFinite(priceQuote) || priceQuote <= 0) continue;
+    const isSol = quoteMint === SOL_MINT;
+    const isStable = quoteMint === USDC_MINT || quoteMint === USDT_MINT;
     out.push({
       wallet,
       side: tokenDelta > 0 ? "buy" : "sell",
       tokenAmount,
-      solAmount,
-      priceSol,
-      priceUsd: solUsd == null ? null : priceSol * solUsd,
+      quoteMint,
+      quoteAmount,
+      priceQuote,
+      solAmount: isSol ? quoteAmount : 0,
+      priceSol: isSol ? priceQuote : null,
+      priceUsd: isSol ? (solUsd == null ? null : priceQuote * solUsd) : (isStable ? priceQuote : null),
       feeLamports,
       pricingMethod: "owner_balance_delta_estimate",
       confidence: "low"
