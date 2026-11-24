@@ -10,11 +10,10 @@ const TOKEN_PROGRAMS = new Set([
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 ]);
-const INVALID_QUOTE_MINTS = new Set([
-  "So11111111111111111111111111111111111111112",
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-]);
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+const INVALID_QUOTE_MINTS = new Set([WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT]);
 const CREATE_LOG = /Program log: Instruction: Create(?:V2)?/i;
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const CAPTURE_MS = Number(process.env.CAPTURE_MINUTES ?? 10) * 60_000;
@@ -47,6 +46,9 @@ type TokenMetrics = {
   curveVirtualTokenReserves?: number | null;
   curveComplete?: boolean | null;
   curveSnapshots?: number;
+  firstPriceQuote?: number | null; lastPriceQuote?: number | null;
+  quoteMint?: string | null; quoteSymbol?: string | null; quoteDecimals?: number | null;
+  curveRealQuoteReserves?: number | null; curveVirtualQuoteReserves?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string;
@@ -71,6 +73,24 @@ let shuttingDown = false;
 let reconciliation: Promise<void> | undefined;
 
 let cachedSolUsd: { value: number; fetchedAt: number } | undefined;
+const quoteDecimalsCache = new Map<string, number>();
+async function getMintDecimals(mint: string): Promise<number | null> {
+  if (mint === WRAPPED_SOL_MINT) return 9;
+  if (quoteDecimalsCache.has(mint)) return quoteDecimalsCache.get(mint)!;
+  try {
+    const response = await nextRpc().getParsedAccountInfo(new PublicKey(mint), "confirmed");
+    const value = response.value;
+    if (!value || !("parsed" in value.data)) return null;
+    const parsed = value.data.parsed as { info?: { decimals?: number } };
+    const decimals = parsed.info?.decimals;
+    if (typeof decimals !== "number" || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) return null;
+    quoteDecimalsCache.set(mint, decimals);
+    return decimals;
+  } catch (error) {
+    console.warn("Could not read quote mint decimals:", mint, String(error).slice(0, 120));
+    return null;
+  }
+}
 async function getSolUsd(): Promise<number | null> {
   if (cachedSolUsd && Date.now() - cachedSolUsd.fetchedAt < 60_000) return cachedSolUsd.value;
   try {
@@ -125,43 +145,45 @@ function decodePumpCurve(data: Buffer): PumpCurveState | null {
 async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   const curve = decodePumpCurve(data);
   if (!curve) return;
-  // A non-default quote mint is not SOL. Do not mislabel its price or reserves as SOL.
-  if (curve.quoteMint) {
-    await appendTokenEvent(item.mint, {
-      schemaVersion: 3, kind: "curve_state", mint: item.mint, slot,
-      quoteMint: curve.quoteMint, pricingAvailable: false,
-      reason: "Non-SOL quote mint; quote-asset conversion not implemented."
-    });
+  // The default pubkey means SOL; a populated quote_mint means an SPL quote asset.
+  const quoteMint = curve.quoteMint ?? WRAPPED_SOL_MINT;
+  const quoteDecimals = await getMintDecimals(quoteMint);
+  if (quoteDecimals == null) {
+    await appendTokenEvent(item.mint, { schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, quoteMint, pricingAvailable: false, reason: "Could not resolve quote mint decimals." });
     return;
   }
   const decimals = item.supplyDecimals ?? 6;
-  const tokenDivisor = 10 ** decimals;
+  const tokenDivisor = 10 ** decimals, quoteDivisor = 10 ** quoteDecimals;
   const virtualToken = Number(curve.virtualTokenRaw) / tokenDivisor;
-  const virtualSol = Number(curve.virtualSolLamports) / 1e9;
+  const virtualQuote = Number(curve.virtualSolLamports) / quoteDivisor;
   const realToken = Number(curve.realTokenRaw) / tokenDivisor;
-  const realSol = Number(curve.realSolLamports) / 1e9;
+  const realQuote = Number(curve.realSolLamports) / quoteDivisor;
   const supply = Number(curve.totalSupplyRaw) / tokenDivisor;
-  if (virtualToken <= 0 || virtualSol <= 0 || supply <= 0) return;
-  const priceSol = virtualSol / virtualToken;
-  const solUsd = await getSolUsd();
-  const priceUsd = solUsd == null ? null : priceSol * solUsd;
+  if (virtualToken <= 0 || virtualQuote <= 0 || supply <= 0) return;
+  const priceQuote = virtualQuote / virtualToken;
+  const isSol = quoteMint === WRAPPED_SOL_MINT, isUsdc = quoteMint === USDC_MINT, isUsdt = quoteMint === USDT_MINT;
+  const solUsd = isSol ? await getSolUsd() : null;
+  const quoteUsd = isSol ? solUsd : (isUsdc || isUsdt ? 1 : null);
+  const priceUsd = quoteUsd == null ? null : priceQuote * quoteUsd;
+  const priceSol = isSol ? priceQuote : null;
+  const quoteSymbol = isSol ? "SOL" : isUsdc ? "USDC" : isUsdt ? "USDT" : "UNKNOWN_SPL";
   const metrics = ensureMetrics(item);
   item.supplyUi = supply;
-  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves") {
-    // Establish the baseline from the first actual curve observation, never a trade estimate.
-    metrics.firstPriceSol = priceSol;
-    metrics.firstPriceUsd = priceUsd;
+  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" || metrics.quoteMint !== quoteMint) {
+    metrics.firstPriceSol = priceSol; metrics.firstPriceUsd = priceUsd; metrics.firstPriceQuote = priceQuote;
+    metrics.quoteMint = quoteMint; metrics.quoteSymbol = quoteSymbol; metrics.quoteDecimals = quoteDecimals;
+    metrics.timeToTargetsSeconds = { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
+    metrics.highPriceUsd = priceUsd; metrics.lowPriceUsd = priceUsd; metrics.maxDrawdownPct = null;
   }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
-  metrics.lastPriceSol = priceSol;
-  metrics.lastPriceUsd = priceUsd;
+  metrics.lastPriceSol = priceSol; metrics.lastPriceUsd = priceUsd; metrics.lastPriceQuote = priceQuote;
   metrics.lastPriceObservedAt = Date.now();
-  metrics.curveRealSolReserves = realSol;
+  metrics.curveRealSolReserves = isSol ? realQuote : null;
   metrics.curveRealTokenReserves = realToken;
-  metrics.curveVirtualSolReserves = virtualSol;
+  metrics.curveVirtualSolReserves = isSol ? virtualQuote : null;
   metrics.curveVirtualTokenReserves = virtualToken;
-  metrics.curveComplete = curve.complete;
-  metrics.curveSnapshots = (metrics.curveSnapshots ?? 0) + 1;
+  metrics.curveRealQuoteReserves = realQuote; metrics.curveVirtualQuoteReserves = virtualQuote;
+  metrics.curveComplete = curve.complete; metrics.curveSnapshots = (metrics.curveSnapshots ?? 0) + 1;
   if (priceUsd != null) {
     metrics.highPriceUsd = metrics.highPriceUsd == null ? priceUsd : Math.max(metrics.highPriceUsd, priceUsd);
     metrics.lowPriceUsd = metrics.lowPriceUsd == null ? priceUsd : Math.min(metrics.lowPriceUsd, priceUsd);
@@ -173,23 +195,17 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
       if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
     }
   }
-  if (curve.creator && item.creator !== curve.creator) {
-    item.creator = curve.creator;
-    await persistState();
-  }
+  if (curve.creator && item.creator !== curve.creator) { item.creator = curve.creator; await persistState(); }
   await appendTokenEvent(item.mint, {
-    schemaVersion: 3, kind: "curve_state", mint: item.mint, slot, observedAt: Date.now(),
-    creator: curve.creator, quoteMint: null, complete: curve.complete,
-    virtualTokenReserves: curve.virtualTokenRaw.toString(),
-    virtualSolReservesLamports: curve.virtualSolLamports.toString(),
-    realTokenReserves: curve.realTokenRaw.toString(),
-    realSolReservesLamports: curve.realSolLamports.toString(),
-    totalSupply: supply, tokenDecimals: decimals,
-    priceSol, priceUsd, solUsd,
-    marketCapSol: marketCap(priceSol, supply), marketCapUsd: marketCap(priceUsd, supply),
-    pricingMethod: "pump_bonding_curve_virtual_reserves",
-    realSolReservesSol: realSol, realTokenReservesUi: realToken,
-    maxDrawdownPct: metrics.maxDrawdownPct,
+    schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, observedAt: Date.now(),
+    creator: curve.creator, quoteMint, quoteSymbol, quoteDecimals, complete: curve.complete,
+    virtualTokenReservesRaw: curve.virtualTokenRaw.toString(), virtualQuoteReservesRaw: curve.virtualSolLamports.toString(),
+    realTokenReservesRaw: curve.realTokenRaw.toString(), realQuoteReservesRaw: curve.realSolLamports.toString(),
+    virtualQuoteReserves: virtualQuote, realQuoteReserves: realQuote,
+    totalSupply: supply, tokenDecimals: decimals, priceQuote, priceSol, priceUsd, quoteUsd, solUsd,
+    marketCapQuote: marketCap(priceQuote, supply), marketCapSol: isSol ? marketCap(priceQuote, supply) : null,
+    marketCapUsd: marketCap(priceUsd, supply), pricingMethod: "pump_bonding_curve_virtual_reserves",
+    realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
   await recordDueSnapshots(item, Date.now());
@@ -212,8 +228,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
     const priceChangePct = metrics.firstPriceUsd && priceUsd != null
       ? ((priceUsd / metrics.firstPriceUsd) - 1) * 100 : null;
     await appendTokenEvent(item.mint, {
-      schemaVersion: 3, kind: "market_snapshot", mint: item.mint,
+      schemaVersion: 4, kind: "market_snapshot", mint: item.mint,
       elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
+      priceQuote: metrics.lastPriceQuote ?? null, quoteMint: metrics.quoteMint ?? null,
+      quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
       marketCapSol, marketCapUsd, totalSupply: supply,
       priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
@@ -225,6 +243,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       pricingMethod: metrics.priceSource ?? "owner_balance_delta_estimate",
       curveComplete: metrics.curveComplete ?? null,
       curveRealSolReserves: metrics.curveRealSolReserves ?? null,
+      curveRealQuoteReserves: metrics.curveRealQuoteReserves ?? null,
+      curveVirtualQuoteReserves: metrics.curveVirtualQuoteReserves ?? null,
       curveRealTokenReserves: metrics.curveRealTokenReserves ?? null
     });
     metrics.snapshotsRecorded.push(seconds);
@@ -337,7 +357,12 @@ async function captureMint(item: TokenState) {
         schemaVersion: 2, kind: "token_activity", mint, observedAt, slot: context.slot,
         signature: logs.signature, err: logs.err, logs: logs.logs,
         transaction: tx ? {
-          blockTime: tx.blockTime, fee: tx.meta?.fee, err: tx.meta?.err,
+          blockTime: tx.blockTime, fee: tx.meta?.fee, feeLamports: tx.meta?.fee,
+          signatureCount: tx.transaction.signatures.length,
+          baseSignatureFeeLamports: tx.transaction.signatures.length * 5_000,
+          estimatedPriorityFeeLamports: Math.max(0, (tx.meta?.fee ?? 0) - tx.transaction.signatures.length * 5_000),
+          computeUnitsConsumed: tx.meta?.computeUnitsConsumed,
+          loadedAddresses: tx.meta?.loadedAddresses, err: tx.meta?.err,
           accountKeys: tx.transaction.message.accountKeys.map(k => getAccountKey(k)),
           preBalances: tx.meta?.preBalances, postBalances: tx.meta?.postBalances,
           preTokenBalances: tx.meta?.preTokenBalances, postTokenBalances: tx.meta?.postTokenBalances,
@@ -510,7 +535,7 @@ async function main() {
     await handleLiveLaunch(logs.signature, logs, context.slot);
   }, "confirmed");
   discoverySubscription = { connection: discovery, id };
-  console.log("Listening for Pump launches; collecting estimated price, market cap, trade counts, volumes, wallet counts and timed snapshots. API keys configured:", keys.length);
+  console.log("Listening for Pump launches; collecting bonding-curve quote-asset prices (SOL/USDC/custom), market caps, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
   void reconcileMissedLaunches();
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
