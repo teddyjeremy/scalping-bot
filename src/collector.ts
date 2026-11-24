@@ -555,8 +555,16 @@ async function captureMint(item: TokenState) {
       if (observedAt > expiresAt) { await stopCapture(mint); return; }
       const tx = await fetchTransaction(logs.signature);
       const item = state.tokens[mint];
-      if (tx && item) await processTradeMetrics(item, tx, logs.signature, context.slot);
+      if (tx && item && (item.quoteMint ?? item.metrics?.quoteMint)) await processTradeMetrics(item, tx, logs.signature, context.slot);
       if (tx && item) await recordDueSnapshots(item, observedAt);
+      if (!tx || (item && !(item.quoteMint ?? item.metrics?.quoteMint))) {
+        state.pendingActivity ??= {};
+        const pending = state.pendingActivity[mint] ??= [];
+        if (!pending.some(entry => entry.signature === logs.signature) && pending.length < 500) {
+          pending.push({ signature: logs.signature, slot: context.slot, observedAt, logs: logs.logs });
+          await persistState();
+        }
+      }
       await appendTokenEvent(mint, {
         schemaVersion: 2, kind: "token_activity", mint, observedAt, slot: context.slot,
         signature: logs.signature, err: logs.err, logs: logs.logs,
@@ -893,6 +901,7 @@ async function shutdown(reason: string) {
   shuttingDown = true;
   console.log("Stopping collector:", reason);
   if (expiryTimer) clearInterval(expiryTimer);
+  if (pendingRetryTimer) clearInterval(pendingRetryTimer);
   if (runTimer) clearTimeout(runTimer);
   if (discoverySubscription) {
     try { await discoverySubscription.connection.removeOnLogsListener(discoverySubscription.id); } catch {}
@@ -911,7 +920,9 @@ async function main() {
   await loadState();
   await auditExistingLaunches();
   const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !INVALID_QUOTE_MINTS.has(item.mint));
-  await restoreTokenEvents(activeTokens.map(item => ({ mint: item.mint, venue: item.venue })));
+  const restoreTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() || (state.pendingActivity?.[item.mint]?.length ?? 0) > 0);
+  await restoreTokenEvents(restoreTokens.map(item => ({ mint: item.mint, venue: item.venue })));
+  await retryPendingActivityTransactions();
   for (const item of activeTokens) await captureMint(item);
   const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
@@ -928,6 +939,7 @@ async function main() {
   console.log("Listening for verified Pump.fun and StonkFun launches; collecting quote-asset prices, pool state, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
   void reconcileMissedLaunches();
   void reconcileMissedStonkLaunches();
+  pendingRetryTimer = setInterval(() => { void retryPendingActivityTransactions(); }, 30_000);
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
   }, 15_000);
