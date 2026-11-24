@@ -176,10 +176,6 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
     )).read_bytes()
     if digest(remote_ledger) != digest(ledger_bytes):
         raise RuntimeError(f"Ledger readback verification failed for {venue}/{mint}")
-    # The coin data and its ledger are durable before the global resume cursor advances.
-    checkpoint = ROOT / "checkpoint.json"
-    if checkpoint.is_file():
-        upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint after coin ledger")
     print(f"V3 published {venue}/{mint}: state={ledger['state']} files={len(paths)} verified=true")
 
 
