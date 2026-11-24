@@ -486,6 +486,15 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         continue;
       }
       if (event.recordType !== "historical_trade_event") continue;
+      const user = String(event.user ?? "");
+      const side = event.side === "buy" || event.side === "sell" ? event.side : null;
+      const quoteMint = String(event.quoteMint ?? "");
+      const tokenRaw = BigInt(String(event.tokenAmountRaw ?? "0"));
+      const quoteRaw = BigInt(String(event.quoteAmountRaw ?? "0"));
+      const dedupe = [signature, event.eventIndex ?? 0, user, side, tokenRaw.toString(), quoteRaw.toString(), quoteMint].join(":");
+      if (!signature || !user || !side || !quoteMint || tokenRaw <= 0n || quoteRaw <= 0n) continue;
+      if (seen.has(dedupe)) { duplicateEvents++; continue; }
+      seen.add(dedupe);
       const feeFields: Array<[string, unknown, unknown]> = [
         ["protocol", event.protocolFeeRaw, event.quoteMint],
         ["platform", event.platformFeeRaw, event.quoteMint],
@@ -506,15 +515,6 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         totals.set(feeName, (totals.get(feeName) ?? 0n) + BigInt(rawFee));
         feeTotalsByMint.set(mint, totals);
       }
-      const user = String(event.user ?? "");
-      const side = event.side === "buy" || event.side === "sell" ? event.side : null;
-      const quoteMint = String(event.quoteMint ?? "");
-      const tokenRaw = BigInt(String(event.tokenAmountRaw ?? "0"));
-      const quoteRaw = BigInt(String(event.quoteAmountRaw ?? "0"));
-      const dedupe = [signature, event.eventIndex ?? 0, user, side, tokenRaw.toString(), quoteRaw.toString(), quoteMint].join(":");
-      if (!signature || !user || !side || !quoteMint || tokenRaw <= 0n || quoteRaw <= 0n) continue;
-      if (seen.has(dedupe)) { duplicateEvents++; continue; }
-      seen.add(dedupe);
       if (typeof event.transactionFeeLamports === "number") tradeFees.set(signature, event.transactionFeeLamports);
       if (side === "buy") { buyEvents++; buyers.add(user); } else { sellEvents++; sellers.add(user); }
       const tokenDecimals = typeof event.tokenDecimals === "number" ? event.tokenDecimals : null;
