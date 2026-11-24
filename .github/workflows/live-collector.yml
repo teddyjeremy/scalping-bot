@@ -8,6 +8,7 @@ on:
       - "src/**"
       - "package.json"
       - "tsconfig.json"
+      - "test/**"
   workflow_dispatch:
   schedule:
     - cron: "0 */5 * * *"
@@ -30,6 +31,7 @@ jobs:
       HF_DATASET_REPO: ndeda/solana-scalping-data
       CAPTURE_MINUTES: "10"
       RUN_FOR_MINUTES: "285"
+      HELIUS_TX_MIN_INTERVAL_MS: "350"
       DATA_DIR: ./data
     steps:
       - uses: actions/checkout@v4
@@ -45,5 +47,7 @@ jobs:
         run: npm install
       - name: Typecheck
         run: npm run typecheck
+      - name: Unit tests
+        run: npm test
       - name: Collect live Pump.fun data
         run: npm start
