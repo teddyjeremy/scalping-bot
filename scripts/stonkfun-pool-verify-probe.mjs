@@ -1,5 +1,3 @@
-import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
-
 const keys = [
   process.env.HELIUS_API_KEY_1,
   process.env.HELIUS_API_KEY_2,
@@ -14,6 +12,52 @@ const STONK_CONFIGS = new Set([
   "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt",
   "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"
 ]);
+
+const INITIALIZERS = new Map([
+  ["afaf6d1f0d989bed", "initialize"],
+  ["4399af27da102620", "initialize_v2"],
+  ["25be7ede2c9aab11", "initialize_with_token_2022"]
+]);
+const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function decodeBase58(value) {
+  let number = 0n;
+  for (const char of value) {
+    const digit = BASE58.indexOf(char);
+    if (digit < 0) throw new Error("Invalid base58 instruction data");
+    number = number * 58n + BigInt(digit);
+  }
+  const bytes = [];
+  while (number > 0n) {
+    bytes.unshift(Number(number & 255n));
+    number >>= 8n;
+  }
+  let leadingZeros = 0;
+  while (leadingZeros < value.length && value[leadingZeros] === "1") leadingZeros++;
+  return new Uint8Array([...new Array(leadingZeros).fill(0), ...bytes]);
+}
+function decodeStonkLaunches(instructions) {
+  const found = [];
+  for (const ix of instructions) {
+    if (ix.programId !== LAUNCHLAB || typeof ix.data !== "string" || !Array.isArray(ix.accounts) || ix.accounts.length < 8) continue;
+    let data;
+    try { data = decodeBase58(ix.data); } catch { continue; }
+    if (data.length < 8) continue;
+    const discriminator = [...data.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    const kind = INITIALIZERS.get(discriminator);
+    const platformConfig = String(ix.accounts[3] ?? "");
+    if (!kind || !STONK_CONFIGS.has(platformConfig)) continue;
+    found.push({
+      kind,
+      payer: String(ix.accounts[0] ?? ""),
+      creator: String(ix.accounts[1] ?? ""),
+      platformConfig,
+      pool: String(ix.accounts[5] ?? ""),
+      mint: String(ix.accounts[6] ?? ""),
+      quoteMint: String(ix.accounts[7] ?? "")
+    });
+  }
+  return found;
+}
 const samples = [
   {
     label: "reward_config",
@@ -117,7 +161,7 @@ for (const sample of samples) {
       ])
     : null;
   const decoded = transaction
-    ? findStonkFunLaunchInstructions(transactionInstructions(transaction), LAUNCHLAB, STONK_CONFIGS)
+    ? decodeStonkLaunches(transactionInstructions(transaction))
     : [];
   const match = decoded.find(item =>
     item.mint === sample.mint &&
