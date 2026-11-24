@@ -113,6 +113,22 @@ Uploads are retried on later batches after failures. The collector must remain r
 
 The dataset is currently configured as `ndeda/solana-scalping-data`. Upload paths use `raw/pumpfun/<MINT>/events.jsonl`. Do not upload `.env`, API keys, or wallet signing secrets.
 
+## Expanded reconstructable research metrics
+
+The collector keeps raw transaction logs, balances, token balances, inner instructions, decoded trade events, fee events, curve/pool state, fixed-time market snapshots and top-holder snapshots so additional research features can be rebuilt later without guessing.
+
+New research utilities:
+
+- Price-path reconstruction: 5s/15s/30s/1m/3m/5m/10m returns when observations exist, total return, high/low and timestamps, time-to-high/low, maximum favourable/adverse excursion from the first observed price, maximum drawdown, realised log-return volatility per observation, largest single-step move and sparse-series warnings.
+- Trade-flow reconstruction: 5s/15s/1m/5m buy/sell counts and quote volume, net flow, buy/sell ratio, buy-volume share, unique active wallets, top-wallet volume concentration, largest/median trade, trade intensity, same-slot trade count and inter-trade gap percentiles.
+- Holder concentration: HHI, effective holder count and Gini coefficient, in addition to top-1/top-5/top-10 shares. Live holder snapshots now store HHI/effective-holder/Gini fields for the observed top-20 owner sample.
+- Reserve-based what-if estimates: constant-product buy/sell output, fee amount, effective price and estimated price impact for a hypothetical order size. This is a research approximation, not a router quote or transaction simulation; do not use it as guaranteed executable proceeds.
+- Network-fee reconstruction: actual recorded transaction fee total, number of fetched fee events, failed transaction count/rate and compute-unit totals/average.
+- A standalone reconstruction utility reads an existing per-mint JSONL event file and outputs a JSON research report. Run:
+  `node --import tsx scripts/reconstruct-research-metrics.ts <events.jsonl> [report.json]`
+
+The reconstruction deliberately preserves limitations: price observations can come from different pricing methods and must be filtered by `pricingMethod`; trade windows only cover recorded trade observations; holder concentration only covers the top-20 sample; fees only cover mint-associated transactions that were fetched. Constant-product estimates omit route-specific fees, priority fees, rent, tips, state changes and route selection. Missing observations remain null rather than being fabricated.
+
 ## Historical window
 
 The requested November 1–23, 2026 period needs an archive backfill. Helius archival RPC can retrieve historical transactions, but scanning the Pump program's entire activity is much heavier than following a known mint. First discover launch signatures/mints for the requested time range, then backfill each selected mint's first 10 minutes. Do not assume a live WebSocket can replay events from earlier dates.
