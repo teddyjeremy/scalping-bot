@@ -1,12 +1,6 @@
 name: Historical Solana research archive
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".historical-archive-start"
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       start_date:
