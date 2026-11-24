@@ -63,7 +63,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
 type HeliusHistoryRow = {
-  signature: string;
+  signature?: string;
   slot: number;
   blockTime: number | null;
   err?: unknown;
@@ -72,6 +72,16 @@ type HeliusHistoryRow = {
 };
 type HeliusHistoryPage = { data: HeliusHistoryRow[]; paginationToken: string | null };
 let enhancedHistorySupport: boolean | null = null;
+function historyRowSignature(row: HeliusHistoryRow): string {
+  if (typeof row.signature === "string" && row.signature) return row.signature;
+  const transaction = row.transaction as { signatures?: unknown[] } | undefined;
+  const first = transaction?.signatures?.[0];
+  if (typeof first === "string") return first;
+  if (first && typeof first === "object" && "signature" in first && typeof (first as { signature?: unknown }).signature === "string") {
+    return (first as { signature: string }).signature;
+  }
+  return "";
+}
 async function getHeliusHistoryPage(address: string, start: number, end: number, paginationToken?: string): Promise<HeliusHistoryPage | null> {
   if (enhancedHistorySupport === false) return null;
   try {
@@ -98,7 +108,13 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
       catch { throw new Error(`Helius history returned non-JSON HTTP ${response.status}: ${responseText.slice(0, 120)}`); }
       if (body.error) throw new Error(`Helius history RPC ${body.error.code ?? ""}: ${body.error.message ?? "unknown error"}`);
       if (!body.result || !Array.isArray(body.result.data)) throw new Error("Helius history RPC returned an unexpected response shape.");
-      return body.result;
+      const data = body.result.data.map(row => {
+        const signature = historyRowSignature(row);
+        if (!signature) throw new Error("Helius full-history row is missing a transaction signature in both the row and transaction.signatures.");
+        if (typeof row.slot !== "number") throw new Error("Helius full-history row is missing its slot.");
+        return { ...row, signature };
+      });
+      return { ...body.result, data };
     });
     enhancedHistorySupport = true;
     return page;
@@ -122,7 +138,7 @@ async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
   for (let offset = 0; offset < rows.length; offset += chunkSize) {
     const chunk = rows.slice(offset, offset + chunkSize);
     const result = await Promise.all(chunk.map(async row => ({
-      entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
+      entry: { signature: historyRowSignature(row), slot: row.slot, blockTime: row.blockTime },
       tx: asParsedTransaction(row) ?? await fetchTx(row.signature),
       providerRecord: row
     })));
