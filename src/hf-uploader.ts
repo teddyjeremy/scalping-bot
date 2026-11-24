@@ -64,11 +64,11 @@ export async function flushHuggingFaceUploads() {
   try {
     const files = await Promise.all(batch.map(async mint => {
       const content = await readFile(path.join(dataDir, "tokens", mint, "events.jsonl"));
-      return { path: `raw/pumpfun/${mint}/events.jsonl`, content: new Blob([content], { type: "application/x-ndjson" }) };
+      return { path: `raw/pumpfun/${mint}/events.jsonl`, content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" }) };
     }));
     if (includeState) {
       const state = await readFile(path.join(dataDir, "collector-state.json"));
-      files.push({ path: "state/collector-state.json", content: new Blob([state], { type: "application/json" }) });
+      files.push({ path: "state/collector-state.json", content: new Blob([state.toString("utf8")], { type: "application/json" }) });
     }
     if (files.length === 0) return;
     await uploadFiles({
