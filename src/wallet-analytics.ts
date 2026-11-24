@@ -241,6 +241,7 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
   const snipers = wallets.filter(p => p.sniperCandidate);
   const bots = wallets.filter(p => p.botScore >= 50);
   const bundled = wallets.filter(p => p.bundleCandidate);
+  const developerCandidates = wallets.filter(p => p.creator || p.launchFeePayer);
   const developerBots = developerCandidates.filter(p => p.botScore >= 50);
   const creatorBots = creators.filter(p => p.botScore >= 50);
   const sniperBots = snipers.filter(p => p.botScore >= 50);
@@ -260,7 +261,6 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
   }
   const topBuyers = [...wallets].sort((a, b) => b.quoteSpent - a.quoteSpent).slice(0, 20);
   const topSellers = [...wallets].sort((a, b) => b.quoteReceived - a.quoteReceived).slice(0, 20);
-  const developerCandidates = wallets.filter(p => p.creator || p.launchFeePayer);
   const earlyBuyers = wallets.filter(p => p.firstBuyElapsedSeconds != null && p.firstBuyElapsedSeconds <= 30);
   return {
     walletCount: wallets.length,
