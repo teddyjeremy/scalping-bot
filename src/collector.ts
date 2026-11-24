@@ -259,7 +259,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   const solUsd = await getSolUsd();
-  const observations = deriveTradeObservations(tx, item.mint, solUsd);
+  const quoteMint = ensureMetrics(item).quoteMint ?? "So11111111111111111111111111111111111111112";
+  const observations = deriveTradeObservations(tx, item.mint, solUsd, quoteMint);
   if (observations.length === 0) return;
   const metrics = ensureMetrics(item);
   for (const trade of observations) {
@@ -272,7 +273,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       if (!metrics.uniqueSellers.includes(trade.wallet)) metrics.uniqueSellers.push(trade.wallet);
     }
     metrics.volumeSol += trade.solAmount;
-    if (trade.priceUsd != null) metrics.volumeUsd += trade.solAmount * (solUsd ?? 0);
+    if (trade.priceUsd != null && trade.quoteMint !== "So11111111111111111111111111111111111111112") metrics.volumeUsd += trade.quoteAmount * trade.priceUsd / trade.priceQuote;
+    else if (trade.priceUsd != null) metrics.volumeUsd += trade.quoteAmount * (solUsd ?? 0);
     // Trade-level balance deltas are retained as low-confidence wallet/volume evidence only.
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
@@ -280,6 +282,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   await appendTokenEvent(item.mint, {
     schemaVersion: 3, kind: "trade_metric", mint: item.mint, signature, slot,
     blockTime: tx.blockTime, observations,
+    quoteMint, quoteSymbol: metrics.quoteSymbol ?? null,
+    tradeVolumeQuote: observations.reduce((sum, trade) => sum + trade.quoteAmount, 0),
     tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
     volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
