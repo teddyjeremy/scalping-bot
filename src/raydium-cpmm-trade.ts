@@ -30,6 +30,8 @@ export type RaydiumCpmmTrade = {
   creatorFeeMint: string;
   inputTransferFeeRaw: bigint;
   outputTransferFeeRaw: bigint;
+  preTradeBaseReserveRaw: bigint;
+  preTradeQuoteReserveRaw: bigint;
 };
 
 export function decodeRaydiumCpmmTradeEvent(
@@ -43,7 +45,7 @@ export function decodeRaydiumCpmmTradeEvent(
     const r = readerFactory(data);
     r.offset = 8;
     const pool = r.key();
-    r.u64(); r.u64();
+    const inputVaultBefore = r.u64(); const outputVaultBefore = r.u64();
     const inputAmount = r.u64();
     const outputAmount = r.u64();
     const inputTransferFeeRaw = r.u64();
@@ -82,7 +84,9 @@ export function decodeRaydiumCpmmTradeEvent(
         quoteAmountRaw,
         pool, tradeFeeRaw, tradeFeeMint: inputMint,
         creatorFeeRaw, creatorFeeMint: creatorFeeOnInput ? inputMint : outputMint,
-        inputTransferFeeRaw, outputTransferFeeRaw
+        inputTransferFeeRaw, outputTransferFeeRaw,
+        preTradeBaseReserveRaw: side === "buy" ? outputVaultBefore : inputVaultBefore,
+        preTradeQuoteReserveRaw: side === "buy" ? inputVaultBefore : outputVaultBefore
       };
     }
     return null;
