@@ -62,14 +62,14 @@ const samples = [
   {
     label: "reward_config",
     mint: "4yCZKKfyJKX3WHcytq6ojF31uKNUSvb9Dkr2p8Qc1YA3",
-    pool: "3smqYePUinM9MQoPLKpBKz2iZpuBWo2KGoG5yfzjLjg2",
+    apiPool: "3smqYePUinM9MQoPLKpBKz2iZpuBWo2KGoG5yfzjLjg2",
     platformConfig: "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt",
     createAtMs: 1794000389000
   },
   {
     label: "standard_config",
     mint: "88NRDhWA6dMV5B4JcZjggwF2c2VLxLctLec16ZgkcZ9g",
-    pool: "3KbdSnZMHbHuRAquTRbKziTWincjs5exqBPGpRmQGfBo",
+    apiPool: "3KbdSnZMHbHuRAquTRbKziTWincjs5exqBPGpRmQGfBo",
     platformConfig: "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7",
     createAtMs: 1794170337000
   }
@@ -132,7 +132,7 @@ for (const sample of samples) {
   let candidate = null;
   while (pages < 10) {
     const page = await rpc("getSignaturesForAddress", [
-      sample.pool,
+      sample.mint,
       { limit: 1000, commitment: "confirmed", ...(before ? { before } : {}) }
     ]);
     if (!Array.isArray(page) || page.length === 0) break;
@@ -178,7 +178,7 @@ for (const sample of samples) {
   results.push({
     label: sample.label,
     expectedMint: sample.mint,
-    expectedPool: sample.pool,
+    apiPool: sample.apiPool,
     expectedPlatformConfig: sample.platformConfig,
     expectedCreateAtUtc: new Date(sample.createAtMs).toISOString(),
     signaturePages: pages,
@@ -189,14 +189,15 @@ for (const sample of samples) {
     createAtDifferenceSeconds: Number.isSafeInteger(candidate?.blockTime) ? candidate.blockTime - expectedCreateAt : null,
     transactionHydrated: Boolean(transaction?.meta && transaction?.transaction),
     launchInstructionDecoded: decoded.length > 0,
-    exactMintPoolPlatformMatch: Boolean(match),
+    exactMintPlatformMatch: Boolean(match),
+    apiPoolMatchesLaunchCurvePool: Boolean(match && sample.apiPool === match.pool),
     decodedMatch: match,
     programInstructionSummary
   });
 }
 
 const report = {
-  status: results.length === samples.length && results.every(item => item.exactMintPoolPlatformMatch)
+  status: results.length === samples.length && results.every(item => item.exactMintPlatformMatch)
     ? "pool_signature_to_launch_instruction_verification_passed"
     : "pool_signature_to_launch_instruction_verification_not_proven",
   readOnly: true,
