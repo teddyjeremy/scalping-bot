@@ -115,7 +115,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; venueTradeFeesQuote?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -223,7 +223,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
@@ -496,6 +496,9 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         estimatedPriorityFeeLamports: metrics.estimatedPriorityFeeLamports,
         baseSignatureFeeLamports: metrics.baseSignatureFeeLamports,
         lastFeePayer: metrics.lastFeePayer ?? null,
+        walletNetworkFeesLamports: metrics.walletNetworkFeesLamports ?? {},
+        launchFeePayerNetworkFeesLamports: item.launchFeePayer ? metrics.walletNetworkFeesLamports?.[item.launchFeePayer] ?? 0 : null,
+        creatorNetworkFeesLamports: item.creator ? metrics.walletNetworkFeesLamports?.[item.creator] ?? 0 : null,
         protocolFeesQuote: metrics.protocolFeesQuote, platformFeesQuote: metrics.platformFeesQuote,
         creatorFeesQuote: metrics.creatorFeesQuote, creatorFeesBase: metrics.creatorFeesBase,
         tradeFeesQuote: metrics.tradeFeesQuote, tradeFeesBase: metrics.tradeFeesBase,
@@ -534,6 +537,32 @@ function refreshWalletCohorts(item: TokenState) {
   }
   metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles);
 }
+async function recordTransactionFeeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
+  const metrics = ensureMetrics(item);
+  if (metrics.processedFeeSignatures!.includes(signature)) return;
+  const fee = tx.meta?.fee;
+  if (typeof fee !== "number" || !Number.isFinite(fee)) return;
+  const feePayer = feePayerForTrade(tx);
+  const message = tx.transaction.message as unknown as { header?: { numRequiredSignatures?: number } };
+  const signerCount = message.header?.numRequiredSignatures ?? 1;
+  const baseSignatureFeeLamports = Math.min(fee, signerCount * 5_000);
+  const estimatedPriorityFeeLamports = Math.max(0, fee - baseSignatureFeeLamports);
+  metrics.networkFeesLamports = (metrics.networkFeesLamports ?? 0) + fee;
+  metrics.networkFeeTransactions = (metrics.networkFeeTransactions ?? 0) + 1;
+  metrics.baseSignatureFeeLamports = (metrics.baseSignatureFeeLamports ?? 0) + baseSignatureFeeLamports;
+  metrics.estimatedPriorityFeeLamports = (metrics.estimatedPriorityFeeLamports ?? 0) + estimatedPriorityFeeLamports;
+  metrics.lastFeePayer = feePayer;
+  if (feePayer) metrics.walletNetworkFeesLamports![feePayer] = (metrics.walletNetworkFeesLamports![feePayer] ?? 0) + fee;
+  metrics.processedFeeSignatures!.push(signature);
+  if (metrics.processedFeeSignatures!.length > 20_000) metrics.processedFeeSignatures = metrics.processedFeeSignatures!.slice(-10_000);
+  await appendTokenEvent(item.mint, {
+    schemaVersion: 1, kind: "transaction_fee", mint: item.mint, signature, slot, blockTime: tx.blockTime,
+    feePayer, networkFeeLamports: fee, signerCount, baseSignatureFeeLamports,
+    estimatedPriorityFeeLamports, computeUnitsConsumed: tx.meta?.computeUnitsConsumed ?? null,
+    transactionFailed: tx.meta?.err != null, transactionError: tx.meta?.err ?? null,
+    feeModelNote: "Base signature fee is estimated at 5000 lamports per required signer; remainder is an estimated priority fee and may include other fee components."
+  });
+}
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true) {
   const allInstructions = allTransactionInstructions(tx);
   let migrationDetected = false;
@@ -571,6 +600,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     }
   }
   const metrics = ensureMetrics(item);
+  await recordTransactionFeeMetrics(item, tx, signature, slot);
   if (metrics.processedTradeSignatures!.includes(signature)) return;
   const solUsd = await getSolUsd();
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
@@ -630,23 +660,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     observations.push(...deriveTradeObservations(tx, item.mint, solUsd, knownQuoteMint));
   }
   if (observations.length === 0) return;
-  if (!metrics.processedFeeSignatures!.includes(signature)) {
-    const message = tx.transaction.message as unknown as { accountKeys?: Array<unknown>; header?: { numRequiredSignatures?: number } };
-    const firstAccount = message.accountKeys?.[0] as { pubkey?: unknown } | string | undefined;
-    const feePayer = typeof firstAccount === "string" ? firstAccount :
-      firstAccount && typeof firstAccount === "object" && "pubkey" in firstAccount ? String(firstAccount.pubkey) : null;
-    const requiredSignatures = message.header?.numRequiredSignatures ?? 1;
-    const baseFee = requiredSignatures * 5_000;
-    const actualFee = tx.meta?.fee ?? 0;
-    const priorityFeeEstimate = Math.max(0, actualFee - baseFee);
-    metrics.networkFeesLamports = (metrics.networkFeesLamports ?? 0) + actualFee;
-    metrics.networkFeeTransactions = (metrics.networkFeeTransactions ?? 0) + 1;
-    metrics.baseSignatureFeeLamports = (metrics.baseSignatureFeeLamports ?? 0) + Math.min(actualFee, baseFee);
-    metrics.estimatedPriorityFeeLamports = (metrics.estimatedPriorityFeeLamports ?? 0) + priorityFeeEstimate;
-    metrics.lastFeePayer = feePayer;
-    metrics.processedFeeSignatures!.push(signature);
-    if (metrics.processedFeeSignatures!.length > 20_000) metrics.processedFeeSignatures = metrics.processedFeeSignatures!.slice(-10_000);
-  }
+
   const observedAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
   for (const trade of observations) {
     const fundingSources = extractFundingSources(tx, trade.wallet);
