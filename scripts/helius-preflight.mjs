@@ -42,7 +42,7 @@ const keyHealth = [];
 for (let i = 0; i < keys.length; i++) {
   const [version, slot] = await Promise.all([
     rpc(keys[i], "getVersion"),
-    rpc(keys[i], "getSlot", ["confirmed"])
+    rpc(keys[i], "getSlot", [{ commitment: "confirmed" }])
   ]);
   if (!version?.["solana-core"] || !Number.isSafeInteger(slot) || slot <= 0) {
     throw new Error(`Helius key slot ${i + 1} failed standard RPC validation.`);
