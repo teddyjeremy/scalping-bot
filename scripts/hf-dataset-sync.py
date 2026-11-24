@@ -118,11 +118,6 @@ def upload():
         print("Queryable Parquet exports and dataset card uploaded.")
     print("Sharded historical archive uploaded to historical-v2.")
 
-if __name__ == "__main__":
-    import sys
-    command = sys.argv[1] if len(sys.argv) > 1 else ""
-    {"restore": restore, "write-test": write_test, "upload": upload, "upload-batch": lambda: upload_batch(sys.argv[2:]), "upload-checkpoint": upload_checkpoint}.get(command, lambda: (_ for _ in ()).throw(SystemExit("Use restore, write-test, or upload")))()
-
 
 def upload_batch(paths):
     """Publish one completed collector batch; publish checkpoint only after its data files."""
@@ -156,3 +151,8 @@ def upload_checkpoint():
             commit_message="Advance resumable historical collection checkpoint",
         )
         print("Published checkpoint after batch data.")
+
+if __name__ == "__main__":
+    import sys
+    command = sys.argv[1] if len(sys.argv) > 1 else ""
+    {"restore": restore, "write-test": write_test, "upload": upload, "upload-batch": lambda: upload_batch(sys.argv[2:]), "upload-checkpoint": upload_checkpoint}.get(command, lambda: (_ for _ in ()).throw(SystemExit("Use restore, write-test, or upload")))()
