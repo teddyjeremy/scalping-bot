@@ -31,15 +31,24 @@ test("recognizes only the official create_v2 discriminator", () => {
     { programId: pump, data: encodeBase58(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8])), accounts: ["not-a-mint"] },
     { programId: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", data, accounts: ["not-a-mint"] }
   ], pump);
-  assert.deepEqual(result, [{ mint, kind: "create_v2" }]);
+  assert.deepEqual(result, [{ mint, creator: null, kind: "create_v2" }]);
 });
 
 test("recognizes the legacy create discriminator", () => {
   const data = encodeBase58(Uint8Array.from([24, 30, 200, 40, 5, 28, 7, 119, 0]));
   assert.deepEqual(
     findPumpCreateInstructions([{ programId: pump, data, accounts: [mint] }], pump),
-    [{ mint, kind: "create" }]
+    [{ mint, creator: null, kind: "create" }]
   );
+});
+
+test("extracts the creator account separately from the transaction fee payer", () => {
+  const data = encodeBase58(Uint8Array.from([24, 30, 200, 40, 5, 28, 7, 119, 0]));
+  const creator = "Creator111111111111111111111111111111111";
+  const result = findPumpCreateInstructions([
+    { programId: pump, data, accounts: [mint, "authority", "curve", "associated-curve", "global", creator] }
+  ], pump);
+  assert.deepEqual(result, [{ mint, creator, kind: "create" }]);
 });
 
 test("does not mistake associated-token Create logs or Pump buys for launch instructions", () => {
