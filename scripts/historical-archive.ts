@@ -347,7 +347,9 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           }));
         }
       }
-      const pageFile = path.join(directory, `source-${sourceIndex}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
+      // Stable source IDs prevent page overwrites when a migration pool is discovered later.
+      const sourceId = createHash("sha256").update(address).digest("hex").slice(0, 16);
+      const pageFile = path.join(directory, `source-${sourceId}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
       await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
       source.pages++;
       pagesThisRun++;
@@ -357,6 +359,9 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       progress.complete = addresses.every(candidate => progress.sources[candidate]?.complete === true);
       state.tradeCursors![record.mint] = progress;
       await save();
+      // Rebuild after every raw page, even when the 10-minute capture is incomplete.
+      await buildMintResearchSummary(record);
+      console.log(`Trade capture ${record.venue} ${record.mint}: source ${sourceId}, page ${source.pages}, events=${lines.length}, complete=${progress.complete}`);
     }
     progress.sources[address] = source;
     progress.complete = addresses.every(candidate => progress.sources[candidate]?.complete === true);
@@ -535,7 +540,7 @@ async function main() {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
       if (!state.tradeCursors?.[record.mint]?.complete) await collectMintTrades(record);
-      if (state.tradeCursors?.[record.mint]?.complete && await summaryNeedsRefresh(record)) await buildMintResearchSummary(record);
+      if (await summaryNeedsRefresh(record)) await buildMintResearchSummary(record);
     }
   }));
   if (await finishBatch(tradeResults)) return;
