@@ -571,11 +571,15 @@ async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
   await load();
   console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission. RPC pacing per key: ${MIN_RPC_INTERVAL_MS}ms.`);
-  const scanResults = await Promise.allSettled([scanProgram(PUMP, "pumpfun"), scanProgram(LAUNCHLAB, "stonkfun")]);
-  if (await finishBatch(scanResults)) return;
+  // One coordinator owns checkpoint and Hub commits. Transaction hydration still
+  // fans out requests across the three independently paced Helius keys.
+  const pumpScan = await Promise.allSettled([scanProgram(PUMP, "pumpfun")]);
+  if (await finishBatch(pumpScan)) return;
+  const stonkScan = await Promise.allSettled([scanProgram(LAUNCHLAB, "stonkfun")]);
+  if (await finishBatch(stonkScan)) return;
   const records = Object.values(state.launches);
   let nextRecord = 0;
-  const workerCount = Math.min(3, records.length);
+  const workerCount = Math.min(1, records.length);
   const tradeResults = await Promise.allSettled(Array.from({ length: workerCount }, async () => {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
