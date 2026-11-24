@@ -160,9 +160,15 @@ for (const sample of samples) {
         { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
       ])
     : null;
-  const decoded = transaction
-    ? decodeStonkLaunches(transactionInstructions(transaction))
-    : [];
+  const normalizedInstructions = transaction ? transactionInstructions(transaction) : [];
+  const decoded = transaction ? decodeStonkLaunches(normalizedInstructions) : [];
+  const programInstructionSummary = normalizedInstructions
+    .filter(ix => ix.programId === LAUNCHLAB)
+    .map(ix => {
+      let discriminator = null;
+      try { discriminator = [...decodeBase58(ix.data).slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join(""); } catch {}
+      return { discriminator, dataPrefix: typeof ix.data === "string" ? ix.data.slice(0, 24) : null, accountsLength: ix.accounts.length, accounts: ix.accounts.slice(0, 10) };
+    });
   const match = decoded.find(item =>
     item.mint === sample.mint &&
     item.pool === sample.pool &&
@@ -184,7 +190,8 @@ for (const sample of samples) {
     transactionHydrated: Boolean(transaction?.meta && transaction?.transaction),
     launchInstructionDecoded: decoded.length > 0,
     exactMintPoolPlatformMatch: Boolean(match),
-    decodedMatch: match
+    decodedMatch: match,
+    programInstructionSummary
   });
 }
 
