@@ -207,6 +207,9 @@ def publish_batch(paths):
 
 
 def restore():
+    # Never reuse old v1/v2 cache contents as v3 input.
+    if ROOT.exists():
+        shutil.rmtree(ROOT)
     ROOT.mkdir(parents=True, exist_ok=True)
     try:
         snapshot = Path(snapshot_download(
