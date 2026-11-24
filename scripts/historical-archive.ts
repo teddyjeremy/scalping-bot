@@ -580,7 +580,11 @@ async function main() {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
       if (!state.tradeCursors?.[record.mint]?.complete) await collectMintTrades(record);
-      if (await summaryNeedsRefresh(record)) await buildMintResearchSummary(record);
+      if (await summaryNeedsRefresh(record)) {
+        await buildMintResearchSummary(record);
+        queueDirtyFile(launchRecordPath(record, ".summary.json"));
+        await uploadDirtyFiles();
+      }
     }
   }));
   if (await finishBatch(tradeResults)) return;
