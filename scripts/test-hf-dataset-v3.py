@@ -72,6 +72,7 @@ try:
         (launch_dir / f"{mint}.summary.json").write_text(json.dumps(summary) + "\n", encoding="utf-8")
         page_name = "source-smoke-page-000001.jsonl"
         trade_rows = [
+            {"recordType": "historical_transaction_observation", "signature": signature, "slot": 1, "blockTime": launch_time},
             {"recordType": "historical_trade_event", "signature": signature, "eventIndex": 0,
              "user": "smoke-wallet", "side": "buy", "tokenAmountRaw": "100",
              "quoteAmountRaw": "5", "quoteMint": "So11111111111111111111111111111111111111112"},
@@ -109,6 +110,7 @@ try:
         assert required.issubset(ledger), "ledger is missing required schema fields"
         assert ledger["streams"]["trade_events"]["record_count"] == 1
         assert ledger["streams"]["failed_transactions"]["record_count"] == 1
+        assert ledger["streams"]["transaction_observations"]["record_count"] == 1
 
         # Simulate a fresh workflow runner restoring only the v3 generation.
         restored = Path(tmp) / "restored-data"
