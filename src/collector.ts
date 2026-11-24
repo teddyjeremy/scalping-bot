@@ -512,7 +512,7 @@ function refreshWalletCohorts(item: TokenState) {
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   if (item.venue === "pumpfun") {
-    const poolDiscovery = findPumpSwapPoolFromInstructions(transactionInstructions(tx), item.mint);
+    const poolDiscovery = findPumpSwapPoolFromInstructions(allTransactionInstructions(tx), item.mint);
     if (poolDiscovery && (!item.quoteMint || item.quoteMint === poolDiscovery.quoteMint)) {
       if (item.pumpSwapPoolAddress !== poolDiscovery.pool) item.pumpSwapPoolAddress = poolDiscovery.pool;
       if (!item.quoteMint) {
@@ -532,7 +532,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const solUsd = await getSolUsd();
   const metrics = ensureMetrics(item);
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
-  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, transactionInstructions(tx));
+  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allTransactionInstructions(tx));
   const observations: import("./metrics.js").TradeObservation[] = [];
   if (decodedEvents.length > 0 && item.supplyDecimals != null) {
     for (const event of decodedEvents) {
@@ -885,6 +885,13 @@ function getAccountKey(key: unknown): string {
 function transactionInstructions(tx: ParsedTransactionWithMeta) {
   // Only message-level instructions can prove a launch; CPI instructions are not launch evidence.
   return getTopLevelInstructions(tx.transaction.message as unknown as { instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }> });
+}
+function allTransactionInstructions(tx: ParsedTransactionWithMeta) {
+  const topLevel = transactionInstructions(tx);
+  const inner = (tx.meta?.innerInstructions ?? []).flatMap(group =>
+    group.instructions as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>
+  );
+  return [...topLevel, ...inner];
 }
 function pumpCreateInstructions(tx: ParsedTransactionWithMeta) {
   return findPumpCreateInstructions(transactionInstructions(tx), PUMP_PROGRAM.toBase58());
