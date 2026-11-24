@@ -536,7 +536,7 @@ function refreshWalletCohorts(item: TokenState) {
     profile.creator = profile.wallet === item.creator;
     profile.launchFeePayer = profile.wallet === item.launchFeePayer;
   }
-  metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles);
+  metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles, metrics.lastPriceQuote ?? null);
 }
 async function recordTransactionFeeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   const metrics = ensureMetrics(item);
