@@ -71,7 +71,9 @@ type HeliusHistoryRow = {
   meta?: unknown;
 };
 type HeliusHistoryPage = { data: HeliusHistoryRow[]; paginationToken: string | null };
-let enhancedHistorySupport: boolean | null = null;
+// Free-tier keys cannot call getTransactionsForAddress (paid-plan endpoint).
+// Use standard Solana RPC history pagination from the first request.
+let enhancedHistorySupport: boolean | null = false;
 function historyRowSignature(row: HeliusHistoryRow): string {
   if (typeof row.signature === "string" && row.signature) return row.signature;
   const transaction = row.transaction as { signatures?: unknown[] } | undefined;
