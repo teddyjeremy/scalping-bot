@@ -195,10 +195,12 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   }
   if (progress.complete) return;
   let pages = 0;
+  let createInstructionsFound = 0;
   while (pages < MAX_PAGES) {
     const enhanced = await getHeliusHistoryPage(queryAddress, START, END, progress.paginationToken);
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
     if (enhanced) {
+      if (venue === "pumpfun" && pages === 0 && enhanced.data.length === 0) throw new Error("Pump mint-authority history index returned no transactions for the requested historical window.");
       hydrated = await Promise.all(enhanced.data.map(async row => ({
         entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
         tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
@@ -207,7 +209,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
     } else {
       const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(queryAddress), { limit: PAGE_SIZE, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
-      if (!signatures.length) { progress.complete = true; state.programs[program] = progress; await save(); break; }
+      if (!signatures.length) {\n        if (venue === "pumpfun" && pages === 0) throw new Error("Pump mint-authority address has no indexed signatures; refusing to mark the historical scan complete.");\n        progress.complete = true; state.programs[program] = progress; await save(); break;\n      }
       const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
       hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
       progress.before = signatures[signatures.length - 1].signature;
@@ -222,7 +224,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         const launches = venue === "pumpfun"
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
           : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
-        for (const launch of launches) {
+        createInstructionsFound += launches.length;\n        for (const launch of launches) {
           const existing = state.launches[launch.mint];
           if (existing) {
             const corrected = { ...existing, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool ?? existing.pool };
@@ -240,10 +242,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         }
       }
     }
-    state.programs[program] = progress;
-    await save();
-    pages++;
-    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
+    if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) throw new Error("Pump mint-authority address returned transactions but no Pump create instructions were decoded.");\n    state.programs[program] = progress;\n    await save();\n    pages++;\n    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
