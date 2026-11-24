@@ -4,6 +4,7 @@ import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
+import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "./wallet-analytics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
@@ -40,7 +41,7 @@ const rpcTails = new WeakMap<Connection, Promise<void>>();
 const rpcLastStartedAt = new WeakMap<Connection, number>();
 const RATE_LIMITED_RPC_METHODS = new Set([
   "getAccountInfo", "getParsedAccountInfo", "getTokenSupply", "getSignaturesForAddress",
-  "getParsedTransaction", "getTransaction", "getMultipleAccountsInfo", "getProgramAccounts",
+  "getParsedTransaction", "getTransaction", "getMultipleAccountsInfo", "getProgramAccounts", "getTokenLargestAccounts",
   "onLogs", "onAccountChange"
 ]);
 const rateLimitedConnections = new WeakMap<Connection, Connection>();
@@ -108,9 +109,12 @@ type TokenMetrics = {
   firstPriceQuote?: number | null; lastPriceQuote?: number | null;
   quoteMint?: string | null; quoteSymbol?: string | null; quoteDecimals?: number | null;
   curveRealQuoteReserves?: number | null; curveVirtualQuoteReserves?: number | null;
+  walletProfiles: Record<string, WalletProfile>;
+  walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
+  holderSnapshotsRecorded?: number[];
 };
 type TokenState = {
-  mint: string; creator: string | null; launchSignature: string;
+  mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
   launchVerified?: boolean; launchInstruction?: "create" | "create_v2" | "initialize" | "initialize_v2" | "initialize_with_token_2022";
   venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
@@ -194,7 +198,8 @@ function ensureMetrics(item: TokenState): TokenMetrics {
     lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null, highPriceQuote: null, lowPriceQuote: null,
     snapshotsRecorded: [], maxDrawdownPct: null,
     timeToTargetsSeconds: { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null },
-    largestBuySol: 0, largestSellSol: 0, largestBuyQuote: 0, largestSellQuote: 0
+    largestBuySol: 0, largestSellSol: 0, largestBuyQuote: 0, largestSellQuote: 0,
+    walletProfiles: {}, holderSnapshotsRecorded: []
   };
   // Upgrade checkpoint metrics written by earlier schema versions without losing accumulated values.
   metrics.volumeSol = Number.isFinite(metrics.volumeSol) ? metrics.volumeSol : 0;
@@ -208,6 +213,8 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.largestSellQuote = Number.isFinite(metrics.largestSellQuote) ? metrics.largestSellQuote : 0;
   metrics.uniqueBuyers ??= [];
   metrics.uniqueSellers ??= [];
+  metrics.walletProfiles ??= {};
+  metrics.holderSnapshotsRecorded ??= [];
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
@@ -316,7 +323,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
     if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
   }
-  if (curve.creator && item.creator !== curve.creator) { item.creator = curve.creator; await persistState(); }
+  if (curve.creator && item.creator !== curve.creator) { item.creator = curve.creator; refreshWalletCohorts(item); await persistState(); }
   await appendTokenEvent(item.mint, {
     schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, observedAt: Date.now(),
     creator: curve.creator, quoteMint, quoteSymbol, quoteDecimals, complete: curve.complete,
@@ -402,6 +409,14 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
     await persistState();
   }
 }
+function refreshWalletCohorts(item: TokenState) {
+  const metrics = ensureMetrics(item);
+  for (const profile of Object.values(metrics.walletProfiles)) {
+    profile.creator = profile.wallet === item.creator;
+    profile.launchFeePayer = profile.wallet === item.launchFeePayer;
+  }
+  metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles);
+}
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   if (item.venue === "pumpfun") {
     const poolDiscovery = findPumpSwapPoolFromInstructions(transactionInstructions(tx), item.mint);
@@ -422,7 +437,23 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const observations = deriveTradeObservations(tx, item.mint, solUsd, quoteMint);
   if (observations.length === 0) return;
   const metrics = ensureMetrics(item);
+  const observedAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
   for (const trade of observations) {
+    const fundingSources = extractFundingSources(tx, trade.wallet);
+    metrics.walletProfiles[trade.wallet] = updateWalletProfile(metrics.walletProfiles[trade.wallet], trade, {
+      observedAt, slot, launchSlot: item.launchSlot ?? slot, launchAt: item.firstSeenAt,
+      launchFeePayer: item.launchFeePayer ?? null, creator: item.creator, fundingSources
+    });
+    const profile = metrics.walletProfiles[trade.wallet];
+    await appendTokenEvent(item.mint, {
+      schemaVersion: 7, kind: "wallet_activity", mint: item.mint, signature, slot, blockTime: tx.blockTime,
+      wallet: trade.wallet, side: trade.side, tokenAmount: trade.tokenAmount, quoteAmount: trade.quoteAmount,
+      quoteMint: trade.quoteMint, observedAt, firstBuyElapsedSeconds: profile.firstBuyElapsedSeconds,
+      isCreator: profile.creator, isLaunchFeePayer: profile.launchFeePayer,
+      sniperCandidate: profile.sniperCandidate, bundleCandidate: profile.bundleCandidate,
+      botScore: profile.botScore, botSignals: profile.botSignals,
+      fundingSources: profile.fundingSources, confidence: "heuristic_wallet_balance_delta"
+    });
     metrics.tradeCount++;
     metrics.volumeQuote += trade.quoteAmount;
     if (trade.side === "buy") {
@@ -449,6 +480,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     // Trade-level balance deltas are retained as low-confidence wallet/volume evidence only.
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
+  refreshWalletCohorts(item);
   const latest = observations[observations.length - 1];
   if (item.venue === "stonkfun" || (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote")) {
     metrics.firstPriceQuote ??= latest.priceQuote;
@@ -479,6 +511,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
     tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
+    walletCohorts: metrics.walletCohorts, walletProfileCount: Object.keys(metrics.walletProfiles).length,
     lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
     marketCapQuote: marketCap(latest.priceQuote, item.supplyUi ?? null),
     marketCapSol: latest.priceSol == null ? null : marketCap(latest.priceSol, item.supplyUi ?? null),
@@ -947,7 +980,7 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
     const createInstruction = pumpCreateInstructions(tx).find(instruction => instruction.mint === mint);
     if (!createInstruction) continue;
     const item: TokenState = {
-      mint, creator: null, launchSignature: signature, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
+      mint, creator: null, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
       supplyUi, supplyDecimals
     };
     ensureMetrics(item);
@@ -985,7 +1018,7 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
     const quoteDecimals = await getMintDecimals(quoteMint);
     const quoteSymbol = quoteMint === WRAPPED_SOL_MINT ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
     const item: TokenState = {
-      mint, creator, launchSignature: signature, launchVerified: true, launchInstruction: kind,
+      mint, creator, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: kind,
       venue: "stonkfun", quoteMint, poolAddress: pool, platformConfig,
       firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS, supplyUi, supplyDecimals
     };
