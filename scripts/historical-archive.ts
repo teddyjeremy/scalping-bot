@@ -17,9 +17,11 @@ const ROOT = process.env.DATA_DIR ?? "./historical-data";
 const PAGE_SIZE = 100;
 const MAX_PAGES = Math.max(1, Number(process.env.HISTORY_MAX_PAGES_PER_RUN ?? 20));
 const CAPTURE_SECONDS = 600;
+const MIN_RPC_INTERVAL_MS = Math.max(100, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? 2000));
 const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, process.env.HELIUS_API_KEY_3].filter((v): v is string => Boolean(v));
 if (keys.length !== 3 || new Set(keys).size !== 3) throw new Error("Historical archive requires three distinct Helius API keys.");
 const connections = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-key=${key}`, "confirmed"));
+class RpcCoolingDownError extends Error { constructor() { super("All three Helius RPC keys are temporarily rate-limited; checkpoint saved for scheduled resume."); this.name = "RpcCoolingDownError"; } }
 let rpcCursor = 0;
 const cooldown = new Map<number, number>();
 const lastStarted = new Map<number, number>();
@@ -39,7 +41,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
     const previous = rpcTails.get(index) ?? Promise.resolve();
     const request = previous.then(async () => {
       if ((cooldown.get(index) ?? 0) > Date.now()) throw new Error("RPC key is cooling down");
-      const wait = Math.max(0, 100 - (Date.now() - (lastStarted.get(index) ?? 0)));
+      const wait = Math.max(0, MIN_RPC_INTERVAL_MS - (Date.now() - (lastStarted.get(index) ?? 0)));
       if (wait) await new Promise(resolve => setTimeout(resolve, wait));
       lastStarted.set(index, Date.now());
       return run(connections[index]);
@@ -54,6 +56,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
       console.warn(`RPC ${method} failed on key slot ${index + 1}; trying another key:`, message.slice(0, 180));
     }
   }
+  if (connections.every((_, index) => (cooldown.get(index) ?? 0) > Date.now())) throw new RpcCoolingDownError();
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
 type HeliusHistoryRow = {
@@ -84,8 +87,12 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
           }]
         })
       });
-      const body = await response.json() as { result?: HeliusHistoryPage; error?: { code?: number; message?: string } };
-      if (!response.ok) throw new Error(`Helius history HTTP ${response.status}: ${JSON.stringify(body.error ?? {})}`);
+      const responseText = await response.text();
+      if (response.status === 429) throw new Error("HTTP 429 Too Many Requests");
+      if (!response.ok) throw new Error(`Helius history HTTP ${response.status}: ${responseText.slice(0, 300)}`);
+      let body: { result?: HeliusHistoryPage; error?: { code?: number; message?: string } };
+      try { body = JSON.parse(responseText) as typeof body; }
+      catch { throw new Error(`Helius history returned non-JSON HTTP ${response.status}: ${responseText.slice(0, 120)}`); }
       if (body.error) throw new Error(`Helius history RPC ${body.error.code ?? ""}: ${body.error.message ?? "unknown error"}`);
       if (!body.result || !Array.isArray(body.result.data)) throw new Error("Helius history RPC returned an unexpected response shape.");
       return body.result;
