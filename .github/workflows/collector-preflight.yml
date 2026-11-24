@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/collector-preflight.yml"
       - "scripts/preflight.ts"
+      - "scripts/historical-archive.ts"
       - "src/**"
       - "test/**"
       - "package.json"
@@ -34,5 +35,7 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      - name: Typecheck historical archive scanner
+        run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/historical-archive.ts
       - name: Test all three Helius keys and dataset access
         run: npm run preflight
