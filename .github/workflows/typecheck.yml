@@ -1,7 +1,7 @@
 name: Collector typecheck
 
 on:
-  workflow_dispatch:
+  push:
 
 jobs:
   typecheck:
@@ -15,6 +15,10 @@ jobs:
       - name: Typecheck
         id: typecheck
         run: npm run typecheck
+      - name: Validate v3 publisher syntax
+        run: |
+          python -m pip install --upgrade huggingface_hub
+          python -m py_compile scripts/hf-dataset-v3-sync.py
       - name: Unit tests
         id: tests
         run: npm test
