@@ -114,7 +114,8 @@ export function decodeTokenAccountAmount(data: Buffer, expectedMint: string): bi
 }
 
 const PUMP_SWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
-const PUMP_SWAP_BUY_DISCRIMINATORS = new Set(["66063d1201daebea", "b817ee6167c5d33d"]);\nconst PUMP_SWAP_SELL_DISCRIMINATORS = new Set(["33e685a4017f83ad", "5df6823ce7e940b2"]);
+const PUMP_SWAP_BUY_DISCRIMINATORS = new Set(["66063d1201daebea", "b817ee6167c5d33d"]);
+const PUMP_SWAP_SELL_DISCRIMINATORS = new Set(["33e685a4017f83ad", "5df6823ce7e940b2"]);
 
 export function findPumpSwapPoolFromInstructions(
   instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
