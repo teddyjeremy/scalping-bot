@@ -93,10 +93,10 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
         body: JSON.stringify({
           jsonrpc: "2.0", id: "historical-archive", method: "getTransactionsForAddress",
           params: [address, {
-            transactionDetails: "full", sortOrder: "asc", limit: 1000, commitment: "confirmed",
+            transactionDetails: "full", sortOrder: "asc", limit: 100, commitment: "confirmed",
             encoding: "jsonParsed", maxSupportedTransactionVersion: 1,
             ...(paginationToken ? { paginationToken } : {}),
-            filters: { blockTime: { gte: start, lte: end }, status: "any" }
+            filters: { blockTime: { gte: start, lt: end }, status: "any" }
           }]
         })
       });
@@ -139,7 +139,7 @@ async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
     const chunk = rows.slice(offset, offset + chunkSize);
     const result = await Promise.all(chunk.map(async row => ({
       entry: { signature: historyRowSignature(row), slot: row.slot, blockTime: row.blockTime },
-      tx: asParsedTransaction(row) ?? await fetchTx(row.signature),
+      tx: asParsedTransaction(row) ?? await fetchTx(historyRowSignature(row)),
       providerRecord: row
     })));
     hydrated.push(...result);
