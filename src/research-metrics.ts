@@ -1,4 +1,4 @@
-export type PricePoint = { at: number; price: number };
+export type PricePoint = { at: number; price: number; source?: string };
 export type TradePoint = {
   at: number;
   slot?: number;
@@ -26,6 +26,8 @@ export function calculatePricePathMetrics(points: PricePoint[]) {
   const last = series[series.length - 1]!;
   let high = first, low = first, maxDrawdownPct = 0, maxFavorablePct = 0, maxAdversePct = 0;
   let peak = first.price;
+  const targetHitTimesSeconds: Record<string, number | null> = { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null, "3x": null };
+  const drawdownHitTimesSeconds: Record<string, number | null> = { "10%": null, "20%": null, "30%": null, "50%": null, "80%": null };
   const logReturns: number[] = [];
   for (let i = 0; i < series.length; i++) {
     const point = series[i]!;
@@ -35,6 +37,15 @@ export function calculatePricePathMetrics(points: PricePoint[]) {
     maxDrawdownPct = Math.min(maxDrawdownPct, (point.price / peak - 1) * 100);
     maxFavorablePct = Math.max(maxFavorablePct, (point.price / first.price - 1) * 100);
     maxAdversePct = Math.min(maxAdversePct, (point.price / first.price - 1) * 100);
+    const elapsed = (point.at - first.at) / 1000;
+    const multiple = point.price / first.price;
+    for (const [label, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2], ["3x", 3]] as const) {
+      if (multiple >= threshold && targetHitTimesSeconds[label] == null) targetHitTimesSeconds[label] = elapsed;
+    }
+    const drawdownFromPeak = (point.price / peak - 1) * 100;
+    for (const [label, threshold] of [["10%", -10], ["20%", -20], ["30%", -30], ["50%", -50], ["80%", -80]] as const) {
+      if (drawdownFromPeak <= threshold && drawdownHitTimesSeconds[label] == null) drawdownHitTimesSeconds[label] = elapsed;
+    }
     if (i > 0) {
       const previous = series[i - 1]!;
       if (point.price > 0 && previous.price > 0) logReturns.push(Math.log(point.price / previous.price));
@@ -71,6 +82,8 @@ export function calculatePricePathMetrics(points: PricePoint[]) {
     maxDrawdownPct,
     maxFavorableExcursionPct: maxFavorablePct,
     maxAdverseExcursionPct: maxAdversePct,
+    targetHitTimesSeconds,
+    drawdownHitTimesSeconds,
     realizedVolatilityPctPerObservation: variance == null ? null : Math.sqrt(variance) * 100,
     largestSingleStepUpPct: logReturns.length ? Math.max(...logReturns.map(value => (Math.exp(value) - 1) * 100)) : null,
     largestSingleStepDownPct: logReturns.length ? Math.min(...logReturns.map(value => (Math.exp(value) - 1) * 100)) : null,
@@ -197,10 +210,10 @@ export function reconstructTokenResearch(events: Array<Record<string, unknown>>)
   for (const event of events) {
     const observedAt = typeof event.observedAt === "number" ? event.observedAt : null;
     if (event.kind === "curve_state" && observedAt != null && typeof event.priceQuote === "number") {
-      prices.push({ at: observedAt, price: event.priceQuote });
+      prices.push({ at: observedAt, price: event.priceQuote, source: typeof event.pricingMethod === "string" ? event.pricingMethod : "curve_state_unknown_source" });
     }
     if (event.kind === "market_snapshot" && observedAt != null && typeof event.priceQuote === "number") {
-      prices.push({ at: observedAt, price: event.priceQuote });
+      prices.push({ at: observedAt, price: event.priceQuote, source: typeof event.pricingMethod === "string" ? event.pricingMethod : "market_snapshot_unknown_source" });
     }
     if (event.kind === "trade_metric") {
       const at = typeof event.blockTime === "number" ? event.blockTime * 1000 : observedAt;
@@ -208,7 +221,7 @@ export function reconstructTokenResearch(events: Array<Record<string, unknown>>)
       for (const trade of observations) {
         if (at == null || (trade.side !== "buy" && trade.side !== "sell") || typeof trade.quoteAmount !== "number") continue;
         trades.push({ at, side: trade.side, quoteAmount: trade.quoteAmount, wallet: typeof trade.wallet === "string" ? trade.wallet : undefined, slot: typeof event.slot === "number" ? event.slot : undefined });
-        if (typeof trade.priceQuote === "number") prices.push({ at, price: trade.priceQuote });
+        if (typeof trade.priceQuote === "number") prices.push({ at, price: trade.priceQuote, source: typeof trade.pricingMethod === "string" ? trade.pricingMethod : "trade_event_unknown_source" });
       }
     }
     if (event.kind === "holder_distribution_snapshot") holderEvents.push(event);
@@ -219,7 +232,13 @@ export function reconstructTokenResearch(events: Array<Record<string, unknown>>)
       if (typeof event.computeUnitsConsumed === "number") fees.computeUnitsConsumed += event.computeUnitsConsumed;
     }
   }
-  const dedupedPrices = [...new Map(prices.map(point => [`${point.at}:${point.price}`, point])).values()];
+  const dedupedPrices = [...new Map(prices.map(point => [`${point.at}:${point.price}:${point.source ?? "unknown"}`, point])).values()];
+  const pricesBySource = new Map<string, PricePoint[]>();
+  for (const point of dedupedPrices) { const source = point.source ?? "unknown"; const group = pricesBySource.get(source) ?? []; group.push(point); pricesBySource.set(source, group); }
+  const pricePathsBySource = Object.fromEntries([...pricesBySource.entries()].map(([source, group]) => [source, calculatePricePathMetrics(group)]));
+  const preferredPriceSources = ["pump_bonding_curve_virtual_reserves", "pumpswap_pool_vault_reserves_plus_virtual_quote", "raydium_cpmm_vault_reserves", "decoded_program_trade_event"];
+  const preferredSource = preferredPriceSources.find(source => pricesBySource.has(source));
+  const preferredPrices = preferredSource ? pricesBySource.get(preferredSource)! : dedupedPrices;
   const latestHolderEvent = holderEvents.sort((a, b) => Number(b.observedAt ?? 0) - Number(a.observedAt ?? 0))[0];
   const latestWallets = latestHolderEvent && Array.isArray(latestHolderEvent.wallets)
     ? latestHolderEvent.wallets as Array<{ owner?: string; amount: number }> : [];
@@ -227,7 +246,9 @@ export function reconstructTokenResearch(events: Array<Record<string, unknown>>)
     mint: launch && typeof launch.mint === "string" ? launch.mint : null,
     venue: launch?.venue ?? "pumpfun",
     launchAt: launch && typeof launch.firstSeenAt === "number" ? launch.firstSeenAt : null,
-    pricePath: calculatePricePathMetrics(dedupedPrices),
+    pricePath: calculatePricePathMetrics(preferredPrices),
+    pricePathsBySource,
+    preferredPricePathSource: preferredSource ?? "mixed_fallback_sources",
     tradeFlow: calculateTradeFlowMetrics(trades, trades.reduce((max, trade) => Math.max(max, trade.at), 0)),
     latestTop20HolderConcentration: calculateHolderConcentration(latestWallets),
     holderSnapshotCount: holderEvents.length,
