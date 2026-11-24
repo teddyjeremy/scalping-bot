@@ -460,15 +460,27 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   };
   await writeFile(path.join(ROOT, "launches", record.venue, record.mint + ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
 }
+async function finishBatch(results: PromiseSettledResult<unknown>[]) {
+  const paused = results.find(result => result.status === "rejected" && result.reason instanceof RpcCoolingDownError);
+  if (paused) {
+    await save();
+    console.warn("rate_limit_pause: all Helius keys are throttled; saved cursors will resume on the next scheduled run.");
+    return true;
+  }
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
+  return false;
+}
 async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
   await load();
-  console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission.`);
-  await Promise.all([scanProgram(PUMP, "pumpfun"), scanProgram(LAUNCHLAB, "stonkfun")]);
+  console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission. RPC pacing per key: ${MIN_RPC_INTERVAL_MS}ms.`);
+  const scanResults = await Promise.allSettled([scanProgram(PUMP, "pumpfun"), scanProgram(LAUNCHLAB, "stonkfun")]);
+  if (await finishBatch(scanResults)) return;
   const records = Object.values(state.launches);
   let nextRecord = 0;
   const workerCount = Math.min(3, records.length);
-  await Promise.all(Array.from({ length: workerCount }, async () => {
+  const tradeResults = await Promise.allSettled(Array.from({ length: workerCount }, async () => {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
       if (state.tradeCursors?.[record.mint]?.complete) continue;
@@ -476,6 +488,7 @@ async function main() {
       if (state.tradeCursors?.[record.mint]?.complete) await buildMintResearchSummary(record);
     }
   }));
-  console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete])))}`);
+  if (await finishBatch(tradeResults)) return;
+  console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete]))) }`);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
