@@ -200,7 +200,7 @@ export function decodeProgramTradeEvents(
         const raydium = decodeRaydiumCpmmTradeEvent(bytes, targetMint, instructions, data => new Reader(data));
         event = raydium ? {
           ...raydium,
-          protocolFeeRaw: raydium.tradeFeeMint === raydium.quoteMint ? raydium.tradeFeeRaw : null,
+          protocolFeeRaw: null,
           platformFeeRaw: null, lpFeeRaw: null,
           creatorFeeRaw: raydium.creatorFeeMint === raydium.quoteMint ? raydium.creatorFeeRaw : null,
           shareFeeRaw: null, cashbackRaw: null, buybackFeeRaw: null,
