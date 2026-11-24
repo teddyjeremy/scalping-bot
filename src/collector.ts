@@ -367,7 +367,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   await recordDueSnapshots(item, Date.now());
   await persistState();
 }
-async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds: number, slot: number) {
+async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds: number, slot: number | null) {
   if (item.supplyUi == null || item.supplyUi <= 0) return false;
   const connection = nextRpc();
   const largest = await connection.getTokenLargestAccounts(new PublicKey(item.mint), "confirmed");
@@ -524,7 +524,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
     }
     if (!metrics.holderSnapshotsRecorded.includes(seconds)) {
       try {
-        const recorded = await recordHolderDistributionSnapshot(item, seconds, 0);
+        const recorded = await recordHolderDistributionSnapshot(item, seconds, null);
         if (recorded) {
           metrics.holderSnapshotsRecorded.push(seconds);
           await persistState();
