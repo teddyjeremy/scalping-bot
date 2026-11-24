@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 
-const pumpOffsets = [0, 70, 140, 210, 350, 500, 700, 1000, 1400, 1500];
+const pumpOffsets = [0, 70, 140, 210, 350, 500, 700, 1000, 1100, 1200, 1300, 1399, 1400];
 const pumpProbes = ["ASC", "DESC"].flatMap(order => pumpOffsets.map(offset => ({
   name: `pumpfun_created_${order.toLowerCase()}_offset_${offset}`,
   url: `https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=100&sort=created_timestamp&order=${order}&includeNsfw=false`
@@ -54,7 +54,8 @@ for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.n
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
 const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
 let nextPageId = null;
-for (let page = 1; page <= 10; page++) {
+let raydiumPageCount = 0;
+for (let page = 1; page <= 40; page++) {
   const url = `${raydiumBase}?${raydiumParams}${nextPageId ? `&nextPageId=${encodeURIComponent(nextPageId)}` : ""}`;
   const response = await requestJson(`raydium_launchlab_new_page_${page}`, url);
   const summary = summarize(response);
@@ -63,12 +64,14 @@ for (let page = 1; page <= 10; page++) {
   const next = data?.nextPageId ?? null;
   if (!response.ok || response.body?.success !== true || !summary.rowCount || !next || next === nextPageId) break;
   nextPageId = next;
+  raydiumPageCount++;
 }
 
 const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
 const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_") && r.ok && r.rowCount > 0);
 const raydiumHasRows = raydiumPages.length > 0;
 const raydiumCursorObserved = raydiumPages.some(r => r.nextPageId);
+const raydiumDates = raydiumPages.flatMap(r => [r.first?.createdAt, r.last?.createdAt]).filter(Number.isFinite);
 
 const report = {
   generatedAt: new Date().toISOString(),
@@ -77,7 +80,9 @@ const report = {
   datasetWritten: false,
   pumpOffsetsTested: pumpOffsets,
   pumpSortOrdersTested: ["ASC", "DESC"],
-  raydiumPagesTested: raydiumPages.length,
+  raydiumPagesTested: raydiumPageCount + (raydiumPages.length ? 1 : 0),
+  raydiumEarliestObservedCreateAt: raydiumDates.length ? Math.min(...raydiumDates) : null,
+  raydiumLatestObservedCreateAt: raydiumDates.length ? Math.max(...raydiumDates) : null,
   checks: {
     pumpfunIndexReturnsRows: pumpHasRows,
     raydiumLaunchLabIndexReturnsRows: raydiumHasRows,
