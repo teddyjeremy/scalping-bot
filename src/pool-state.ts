@@ -114,7 +114,7 @@ export function decodeTokenAccountAmount(data: Buffer, expectedMint: string): bi
 }
 
 const PUMP_SWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
-const PUMP_SWAP_SWAP_DISCRIMINATORS = new Set(["66063d1201daebea", "33e685a4017f83ad"]);
+const PUMP_SWAP_BUY_DISCRIMINATORS = new Set(["66063d1201daebea", "b817ee6167c5d33d"]);\nconst PUMP_SWAP_SELL_DISCRIMINATORS = new Set(["33e685a4017f83ad", "5df6823ce7e940b2"]);
 
 export function findPumpSwapPoolFromInstructions(
   instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
@@ -127,12 +127,12 @@ export function findPumpSwapPoolFromInstructions(
     try { bytes = decodeBase58(instruction.data); } catch { continue; }
     if (bytes.length < 8) continue;
     const discriminator = [...bytes.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("");
-    if (!PUMP_SWAP_SWAP_DISCRIMINATORS.has(discriminator)) continue;
+    if (!PUMP_SWAP_BUY_DISCRIMINATORS.has(discriminator) && !PUMP_SWAP_SELL_DISCRIMINATORS.has(discriminator)) continue;
     const pool = String(instruction.accounts[0] ?? "");
     const baseMint = String(instruction.accounts[3] ?? "");
     const quoteMint = String(instruction.accounts[4] ?? "");
     if (!pool || baseMint !== mint || !quoteMint) continue;
-    return { pool, quoteMint, side: discriminator === "66063d1201daebea" ? "buy" : "sell" };
+    return { pool, quoteMint, side: PUMP_SWAP_BUY_DISCRIMINATORS.has(discriminator) ? "buy" : "sell" };
   }
   return null;
 }
