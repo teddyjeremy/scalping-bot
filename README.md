@@ -183,3 +183,18 @@ The historical backfill is a separate research pipeline. It is not an AI trading
 Historical labels such as bot, sniper and bundle are **heuristic candidates**, not proof of automation or common ownership. Historical USD prices, complete holder snapshots and exact historical total supply are not fabricated. Launch-transaction touched token-account balances are retained as raw evidence but are not treated as total supply or used to calculate market capitalization.
 
 The collector's purpose is to build a reliable dataset. Complex entry/exit rules are a later research and backtesting task, derived from the collected evidence.
+
+## Historical archive dataset tables (added 2026-11-24)
+
+The separate historical research archive is **not** the live collector and does not submit trades.
+
+- `data/launches.parquet`: launch metadata and launch transaction fee/compute usage.
+- `data/launch_summaries.parquet`: per-mint event counts and explicit capture-completeness metadata.
+- `data/trade_events.parquet`: decoded buy/sell events, raw amounts, quote asset, fee fields and quote-denominated implied price.
+- `data/failed_transactions.parquet`: failed transaction observations and network fees.
+
+Raw JSON/JSONL files and resumable cursors remain under `historical/`. The Parquet tables are query-friendly derived exports; `raw_json` retains the complete source record.
+
+A summary is provisional until `capture.complete` is true. A zero-trade summary must be checked against raw transaction pages and decoder coverage; zero does not automatically mean the token had no trades. Amounts in `*Raw` columns are integer base units. `impliedQuotePrice` is denominated in the quote asset, not USD.
+
+Historical USD prices, FDV and holder snapshots are not invented when unavailable. Bot/sniper/bundle labels remain heuristic candidates, not proven identities.
