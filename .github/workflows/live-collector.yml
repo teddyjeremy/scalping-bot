@@ -52,15 +52,6 @@ jobs:
       - name: Unit tests
         id: tests
         run: npm test
-      - name: Publish preflight verification
-        if: always()
-        continue-on-error: true
-        env:
-          VERIFICATION_STAGE: preflight
-          JOB_STATUS: ${{ job.status }}
-          TYPECHECK_STATUS: ${{ steps.typecheck.outcome }}
-          UNIT_TEST_STATUS: ${{ steps.tests.outcome }}
-        run: node scripts/publish-ci-status.mjs
       - name: Collect live Pump.fun data
         id: collect
         run: npm start
