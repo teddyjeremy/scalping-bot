@@ -319,7 +319,7 @@ def restore():
                             page_dir.mkdir(parents=True, exist_ok=True)
                             for page in pages.glob("*.jsonl"):
                                 shutil.copy2(page, page_dir / page.name)
-    # Reconcile completed per-coin ledgers in case a run stopped after a coin
+    # Reconcile transaction-history-complete COMPLETE/PARTIAL per-coin ledgers in case a run stopped after a coin
     # ledger commit but before the global checkpoint upload.
     checkpoint_file = ROOT / "checkpoint.json"
     if checkpoint_file.is_file():
@@ -348,7 +348,7 @@ def restore():
                                 for address, info in source_states.items()},
                 }
         checkpoint_file.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
-    print("Restored dataset_v3 files and checkpoint; COMPLETE coin ledgers were reconciled. Legacy generations were not imported.")
+    print("Restored dataset_v3 files and checkpoint; transaction-history-complete coin ledgers were reconciled. Legacy generations were not imported.")
 
 
 def write_test():
