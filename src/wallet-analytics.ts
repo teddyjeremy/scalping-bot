@@ -3,6 +3,7 @@ export type WalletTradeObservation = {
   side: "buy" | "sell";
   tokenAmount: number;
   quoteAmount: number;
+  confidence?: "low" | "high";
 };
 
 export type WalletProfile = {
@@ -10,6 +11,12 @@ export type WalletProfile = {
   firstSeenAt: number;
   lastSeenAt: number;
   transactionCount: number;
+  exactTransactionCount: number;
+  estimatedTransactionCount: number;
+  exactQuoteSpent: number;
+  estimatedQuoteSpent: number;
+  exactQuoteReceived: number;
+  estimatedQuoteReceived: number;
   buyCount: number;
   sellCount: number;
   tokenBought: number;
@@ -54,6 +61,12 @@ export function updateWalletProfile(
     firstSeenAt: context.observedAt,
     lastSeenAt: context.observedAt,
     transactionCount: 0,
+    exactTransactionCount: 0,
+    estimatedTransactionCount: 0,
+    exactQuoteSpent: 0,
+    estimatedQuoteSpent: 0,
+    exactQuoteReceived: 0,
+    estimatedQuoteReceived: 0,
     buyCount: 0,
     sellCount: 0,
     tokenBought: 0,
@@ -79,7 +92,15 @@ export function updateWalletProfile(
   };
 
   // One observation per wallet per signature should be supplied by the caller.
+  profile.exactTransactionCount ??= 0;
+  profile.estimatedTransactionCount ??= 0;
+  profile.exactQuoteSpent ??= 0;
+  profile.estimatedQuoteSpent ??= 0;
+  profile.exactQuoteReceived ??= 0;
+  profile.estimatedQuoteReceived ??= 0;
   profile.transactionCount++;
+  if (trade.confidence === "high") profile.exactTransactionCount++;
+  else profile.estimatedTransactionCount++;
   profile.lastSeenAt = context.observedAt;
   profile.recentTransactionTimes.push(context.observedAt);
   profile.recentTransactionSlots.push(context.slot);
@@ -95,6 +116,8 @@ export function updateWalletProfile(
     profile.buyCount++;
     profile.tokenBought += trade.tokenAmount;
     profile.quoteSpent += trade.quoteAmount;
+    if (trade.confidence === "high") profile.exactQuoteSpent += trade.quoteAmount;
+    else profile.estimatedQuoteSpent += trade.quoteAmount;
     profile.lastBuyAt = context.observedAt;
     if (profile.firstBuyAt == null) {
       profile.firstBuyAt = context.observedAt;
@@ -105,6 +128,8 @@ export function updateWalletProfile(
     profile.sellCount++;
     profile.tokenSold += trade.tokenAmount;
     profile.quoteReceived += trade.quoteAmount;
+    if (trade.confidence === "high") profile.exactQuoteReceived += trade.quoteAmount;
+    else profile.estimatedQuoteReceived += trade.quoteAmount;
     profile.lastSellAt = context.observedAt;
   }
   profile.observedNetTokenChange = profile.tokenBought - profile.tokenSold;
@@ -193,13 +218,19 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     bundledEntryCandidateWallets: bundled.map(p => p.wallet),
     creatorBuyQuote: creators.reduce((n, p) => n + p.quoteSpent, 0),
     creatorSellQuote: creators.reduce((n, p) => n + p.quoteReceived, 0),
+    creatorExactBuyQuote: creators.reduce((n, p) => n + p.exactQuoteSpent, 0),
+    creatorExactSellQuote: creators.reduce((n, p) => n + p.exactQuoteReceived, 0),
+    creatorEstimatedBuyQuote: creators.reduce((n, p) => n + p.estimatedQuoteSpent, 0),
+    creatorEstimatedSellQuote: creators.reduce((n, p) => n + p.estimatedQuoteReceived, 0),
     creatorObservedNetTokenChange: creators.reduce((n, p) => n + p.observedNetTokenChange, 0),
     launchFeePayerBuyQuote: devFeePayers.reduce((n, p) => n + p.quoteSpent, 0),
     launchFeePayerSellQuote: devFeePayers.reduce((n, p) => n + p.quoteReceived, 0),
+    launchFeePayerExactBuyQuote: devFeePayers.reduce((n, p) => n + p.exactQuoteSpent, 0),
+    launchFeePayerExactSellQuote: devFeePayers.reduce((n, p) => n + p.exactQuoteReceived, 0),
     sniperBuyQuote: snipers.reduce((n, p) => n + p.quoteSpent, 0),
     botCandidateBuyQuote: bots.reduce((n, p) => n + p.quoteSpent, 0),
-    topBuyerWallets: topBuyers.map(p => ({ wallet: p.wallet, quoteSpent: p.quoteSpent, tokenBought: p.tokenBought, transactionCount: p.transactionCount, sniperCandidate: p.sniperCandidate, botScore: p.botScore })),
-    topSellerWallets: topSellers.map(p => ({ wallet: p.wallet, quoteReceived: p.quoteReceived, tokenSold: p.tokenSold, transactionCount: p.transactionCount, creator: p.creator, botScore: p.botScore })),
+    topBuyerWallets: topBuyers.map(p => ({ wallet: p.wallet, quoteSpent: p.quoteSpent, exactQuoteSpent: p.exactQuoteSpent, estimatedQuoteSpent: p.estimatedQuoteSpent, tokenBought: p.tokenBought, transactionCount: p.transactionCount, exactTransactionCount: p.exactTransactionCount, estimatedTransactionCount: p.estimatedTransactionCount, sniperCandidate: p.sniperCandidate, botScore: p.botScore })),
+    topSellerWallets: topSellers.map(p => ({ wallet: p.wallet, quoteReceived: p.quoteReceived, exactQuoteReceived: p.exactQuoteReceived, estimatedQuoteReceived: p.estimatedQuoteReceived, tokenSold: p.tokenSold, transactionCount: p.transactionCount, creator: p.creator, botScore: p.botScore })),
     sameSlotEntryGroups: [...sameSlotGroups.entries()].filter(([, members]) => members.length > 1)
       .map(([slot, members]) => ({ slot, wallets: [...new Set(members)] })),
     sharedFundingGroups: [...fundingGroups.entries()].filter(([, members]) => members.length > 1)
