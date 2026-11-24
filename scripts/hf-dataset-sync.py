@@ -121,4 +121,38 @@ def upload():
 if __name__ == "__main__":
     import sys
     command = sys.argv[1] if len(sys.argv) > 1 else ""
-    {"restore": restore, "write-test": write_test, "upload": upload}.get(command, lambda: (_ for _ in ()).throw(SystemExit("Use restore, write-test, or upload")))()
+    {"restore": restore, "write-test": write_test, "upload": upload, "upload-batch": lambda: upload_batch(sys.argv[2:]), "upload-checkpoint": upload_checkpoint}.get(command, lambda: (_ for _ in ()).throw(SystemExit("Use restore, write-test, or upload")))()
+
+
+def upload_batch(paths):
+    """Publish one completed collector batch; publish checkpoint only after its data files."""
+    root = Path("historical-data").resolve()
+    selected = []
+    for raw in paths:
+        candidate = Path(raw).resolve()
+        if root not in candidate.parents or not candidate.is_file():
+            raise SystemExit(f"Refusing invalid batch path: {raw}")
+        selected.append(candidate.relative_to(root).as_posix())
+    if selected:
+        api.upload_folder(
+            folder_path=str(root),
+            path_in_repo="historical-v2",
+            repo_id=REPO_ID,
+            repo_type="dataset",
+            allow_patterns=selected,
+            commit_message=f"Incremental archive batch: {len(selected)} completed file(s)",
+        )
+        print(f"Published {len(selected)} completed archive file(s) to historical-v2.")
+    upload_checkpoint()
+
+def upload_checkpoint():
+    checkpoint = Path("historical-data/checkpoint.json")
+    if checkpoint.exists():
+        api.upload_file(
+            path_or_fileobj=str(checkpoint),
+            path_in_repo="historical-v2/checkpoint.json",
+            repo_id=REPO_ID,
+            repo_type="dataset",
+            commit_message="Advance resumable historical collection checkpoint",
+        )
+        print("Published checkpoint after batch data.")
