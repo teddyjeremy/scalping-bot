@@ -14,7 +14,7 @@ on:
         default: "2026-11-24"
         type: string
       max_pages:
-        description: "Maximum 100 full-transaction records per page; pages per address per run"
+        description: "Maximum 100 signature records per standard RPC page; pages per address per run"
         required: true
         default: "20"
         type: string
