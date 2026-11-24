@@ -1,0 +1,32 @@
+name: Launch discovery endpoint probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/launch-discovery-probe.mjs"
+      - ".github/workflows/launch-discovery-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe public launch discovery endpoints
+        run: node scripts/launch-discovery-probe.mjs
+      - name: Preserve report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: launch-discovery-endpoint-probe
+          path: launch-discovery-probe-output/
+          if-no-files-found: warn
+          retention-days: 14
