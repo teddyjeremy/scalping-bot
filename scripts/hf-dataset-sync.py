@@ -18,7 +18,7 @@ def restore():
             repo_id=REPO_ID,
             repo_type="dataset",
             token=TOKEN,
-            allow_patterns=["historical/**"],
+            allow_patterns=["historical/**", "historical-v2/**"],
         ))
     except Exception as exc:
         message = str(exc).lower()
@@ -26,10 +26,45 @@ def restore():
             print("No previous historical archive found; starting with an empty checkpoint.")
             return
         raise
-    source = snapshot / "historical"
+    source_v2 = snapshot / "historical-v2"
+    source_legacy = snapshot / "historical"
+    source = source_v2 if source_v2.exists() else source_legacy
     if source.exists():
         shutil.copytree(source, local, dirs_exist_ok=True)
-    print(f"Restored historical archive into {local}")
+    # One-time migration: shard legacy flat launch files and mint trade folders
+    # by a stable SHA-256 prefix so no Hugging Face directory exceeds 10,000 entries.
+    import hashlib
+    launches = local / "launches"
+    if launches.exists():
+        for venue_dir in [p for p in launches.iterdir() if p.is_dir()]:
+            for item in list(venue_dir.iterdir()):
+                if not item.is_file() or item.suffix != ".json":
+                    continue
+                mint = item.name.removesuffix(".summary.json").removesuffix(".json")
+                shard = hashlib.sha256(mint.encode()).hexdigest()[:2]
+                target_dir = venue_dir / shard
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target = target_dir / item.name
+                if not target.exists():
+                    shutil.move(str(item), str(target))
+                else:
+                    item.unlink()
+    trades = local / "trades"
+    if trades.exists():
+        for venue_dir in [p for p in trades.iterdir() if p.is_dir()]:
+            for mint_dir in list(venue_dir.iterdir()):
+                if not mint_dir.is_dir() or len(mint_dir.name) != 44:
+                    continue
+                shard = hashlib.sha256(mint_dir.name.encode()).hexdigest()[:2]
+                target_dir = venue_dir / shard
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target = target_dir / mint_dir.name
+                if target.exists():
+                    shutil.copytree(mint_dir, target, dirs_exist_ok=True)
+                    shutil.rmtree(mint_dir)
+                else:
+                    shutil.move(str(mint_dir), str(target))
+    print(f"Restored and sharded historical archive into {local} (source={'historical-v2' if source == source_v2 else 'legacy historical'})")
 
 def write_test():
     path = f"_preflight/write-test-{os.environ.get('GITHUB_RUN_ID', 'manual')}.txt"
@@ -59,10 +94,10 @@ def upload():
         return
     api.upload_folder(
         folder_path=str(folder),
-        path_in_repo="historical",
+        path_in_repo="historical-v2",
         repo_id=REPO_ID,
         repo_type="dataset",
-        commit_message="Update resumable Solana historical research archive",
+        commit_message="Upload sharded resumable Solana research archive",
     )
     exports = Path("dataset-export")
     if exports.exists():
@@ -81,7 +116,7 @@ def upload():
             commit_message="Publish Solana research dataset card",
         )
         print("Queryable Parquet exports and dataset card uploaded.")
-    print("Historical archive uploaded.")
+    print("Sharded historical archive uploaded to historical-v2.")
 
 if __name__ == "__main__":
     import sys
