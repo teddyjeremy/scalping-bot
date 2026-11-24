@@ -448,6 +448,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote" || metrics.priceSource === "raydium_cpmm_vault_reserves" || metrics.priceSource === "decoded_program_trade_event";
   if (!hasPrimaryPrice && !isStonkFun && item.supplyUi == null) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
+  metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles, metrics.lastPriceQuote);
   metrics.holderSnapshotsRecorded ??= [];
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds) continue;
