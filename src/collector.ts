@@ -787,6 +787,9 @@ async function shutdown(reason: string) {
   if (discoverySubscription) {
     try { await discoverySubscription.connection.removeOnLogsListener(discoverySubscription.id); } catch {}
   }
+  if (stonkDiscoverySubscription) {
+    try { await stonkDiscoverySubscription.connection.removeOnLogsListener(stonkDiscoverySubscription.id); } catch {}
+  }
   await Promise.all([...activeSubscriptions.keys()].map(stopCapture));
   if (reconciliation) await reconciliation;
   await persistState();
@@ -805,7 +808,13 @@ async function main() {
     await handleLiveLaunch(logs.signature, logs, context.slot);
   }, "confirmed");
   discoverySubscription = { connection: discovery, id };
-  console.log("Listening for Pump launches; collecting bonding-curve quote-asset prices (SOL/USDC/custom), market caps, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
+  const launchLabDiscovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
+  const stonkId = await launchLabDiscovery.onLogs(LAUNCHLAB_PROGRAM, async (logs, context) => {
+    if (shuttingDown || logs.err || !STONK_LAUNCH_LOG.test(logs.logs.join("\n"))) return;
+    await handleLiveStonkLaunch(logs.signature, logs, context.slot);
+  }, "confirmed");
+  stonkDiscoverySubscription = { connection: launchLabDiscovery, id: stonkId };
+  console.log("Listening for verified Pump.fun and StonkFun launches; collecting quote-asset prices, pool state, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
   void reconcileMissedLaunches();
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
