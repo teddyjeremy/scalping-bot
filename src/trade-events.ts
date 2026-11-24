@@ -1,6 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
 import { decodeBase58 } from "./pump-instructions.js";
-import { decodeRaydiumCpmmTradeEvent } from "./raydium-cpmm-trade.js";
+import { decodeRaydiumCpmmTradeEvent } from "./raydium-cpmm-trade.js";\nimport { findPumpSwapPoolFromInstructions } from "./pool-state.js";
 
 const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const PUMP_AMM_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
@@ -222,7 +222,7 @@ export function decodeProgramTradeEvents(
         } : null;
       }
       if (!event) continue;
-      if (event.venue === "pumpswap") event.mint = targetMint;
+      if (event.venue === "pumpswap") {\n        event.mint = targetMint;\n        const pool = findPumpSwapPoolFromInstructions(instructions, targetMint);\n        if (pool) event.quoteMint = pool.quoteMint;\n      }
       if (event.mint === targetMint && event.tokenAmountRaw > 0n && event.quoteAmountRaw > 0n) decoded.push(event);
       continue;
     }
