@@ -96,6 +96,7 @@ let discoverySubscription: { connection: Connection; id: number } | undefined;
 let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
 let pendingRetryTimer: NodeJS.Timeout | undefined;
+let quarantineRetryTimer: NodeJS.Timeout | undefined;
 let retryingPendingActivity = false;
 let runTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
@@ -975,6 +976,7 @@ async function shutdown(reason: string) {
   console.log("Stopping collector:", reason);
   if (expiryTimer) clearInterval(expiryTimer);
   if (pendingRetryTimer) clearInterval(pendingRetryTimer);
+  if (quarantineRetryTimer) clearInterval(quarantineRetryTimer);
   if (runTimer) clearTimeout(runTimer);
   if (discoverySubscription) {
     try { await discoverySubscription.connection.removeOnLogsListener(discoverySubscription.id); } catch {}
@@ -1017,6 +1019,9 @@ async function main() {
   void reconcileMissedLaunches();
   void reconcileMissedStonkLaunches();
   pendingRetryTimer = setInterval(() => { void retryPendingActivityTransactions(); }, 30_000);
+  quarantineRetryTimer = setInterval(() => {
+    void Promise.all(Object.keys(qualityManifest.quarantinedMints).map(migrateQuarantinedMint));
+  }, 120_000);
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
   }, 15_000);
