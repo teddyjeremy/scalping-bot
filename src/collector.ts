@@ -14,7 +14,7 @@ const INVALID_QUOTE_MINTS = new Set([
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 ]);
-const CREATE_LOG = /Program log: Instruction: Create(?:V2)?\\b/i;
+const CREATE_LOG = /Program log: Instruction: Create(?:V2)?/i;
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const CAPTURE_MS = Number(process.env.CAPTURE_MINUTES ?? 10) * 60_000;
 const RUN_FOR_MS = Number(process.env.RUN_FOR_MINUTES ?? 0) * 60_000;
