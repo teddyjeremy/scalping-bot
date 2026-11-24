@@ -39,6 +39,12 @@ export type WalletProfile = {
   botSignals: string[];
   sniperCandidate: boolean;
   bundleCandidate: boolean;
+  processedSignatures?: string[];
+  trackedTokenBalance?: number;
+  remainingObservedCostBasisQuote?: number;
+  realizedPnlQuote?: number | null;
+  inventoryCoverageComplete?: boolean;
+  sellExceedsObservedBuys?: boolean;
 };
 
 export type WalletAnalyticsContext = {
@@ -49,6 +55,7 @@ export type WalletAnalyticsContext = {
   launchFeePayer: string | null;
   creator: string | null;
   fundingSources?: string[];
+  signature?: string;
 };
 
 export function updateWalletProfile(
@@ -88,7 +95,9 @@ export function updateWalletProfile(
     botScore: 0,
     botSignals: [],
     sniperCandidate: false,
-    bundleCandidate: false
+    bundleCandidate: false,
+    processedSignatures: [], trackedTokenBalance: 0, remainingObservedCostBasisQuote: 0,
+    realizedPnlQuote: 0, inventoryCoverageComplete: true, sellExceedsObservedBuys: false
   };
 
   // One observation per wallet per signature should be supplied by the caller.
@@ -98,12 +107,24 @@ export function updateWalletProfile(
   profile.estimatedQuoteSpent ??= 0;
   profile.exactQuoteReceived ??= 0;
   profile.estimatedQuoteReceived ??= 0;
-  profile.transactionCount++;
-  if (trade.confidence === "high") profile.exactTransactionCount++;
-  else profile.estimatedTransactionCount++;
-  profile.lastSeenAt = context.observedAt;
-  profile.recentTransactionTimes.push(context.observedAt);
-  profile.recentTransactionSlots.push(context.slot);
+  profile.processedSignatures ??= [];
+  profile.trackedTokenBalance ??= 0;
+  profile.remainingObservedCostBasisQuote ??= 0;
+  profile.inventoryCoverageComplete ??= false;
+  profile.sellExceedsObservedBuys ??= false;
+  const newSignature = !context.signature || !profile.processedSignatures.includes(context.signature);
+  if (newSignature) {
+    profile.transactionCount++;
+    if (trade.confidence === "high") profile.exactTransactionCount++;
+    else profile.estimatedTransactionCount++;
+    profile.lastSeenAt = context.observedAt;
+    profile.recentTransactionTimes.push(context.observedAt);
+    profile.recentTransactionSlots.push(context.slot);
+    if (context.signature) {
+      profile.processedSignatures.push(context.signature);
+      if (profile.processedSignatures.length > 200) profile.processedSignatures = profile.processedSignatures.slice(-100);
+    }
+  }
   profile.recentTransactionTimes = profile.recentTransactionTimes.filter(t => context.observedAt - t <= 30_000).slice(-30);
   profile.recentTransactionSlots = profile.recentTransactionSlots.slice(-30);
   profile.launchFeePayer ||= context.launchFeePayer === trade.wallet;
@@ -118,6 +139,11 @@ export function updateWalletProfile(
     profile.quoteSpent += trade.quoteAmount;
     if (trade.confidence === "high") profile.exactQuoteSpent += trade.quoteAmount;
     else profile.estimatedQuoteSpent += trade.quoteAmount;
+    const previousBalance = profile.trackedTokenBalance;
+    const previousBasis = profile.remainingObservedCostBasisQuote;
+    profile.trackedTokenBalance = previousBalance + trade.tokenAmount;
+    profile.remainingObservedCostBasisQuote = previousBasis + trade.quoteAmount;
+    if (profile.realizedPnlQuote == null && profile.inventoryCoverageComplete) profile.realizedPnlQuote = 0;
     profile.lastBuyAt = context.observedAt;
     if (profile.firstBuyAt == null) {
       profile.firstBuyAt = context.observedAt;
@@ -130,6 +156,19 @@ export function updateWalletProfile(
     profile.quoteReceived += trade.quoteAmount;
     if (trade.confidence === "high") profile.exactQuoteReceived += trade.quoteAmount;
     else profile.estimatedQuoteReceived += trade.quoteAmount;
+    const available = profile.trackedTokenBalance ?? 0;
+    const basis = profile.remainingObservedCostBasisQuote ?? 0;
+    if (trade.tokenAmount > available + Math.max(1e-12, available * 1e-8)) {
+      profile.sellExceedsObservedBuys = true;
+      profile.inventoryCoverageComplete = false;
+      profile.realizedPnlQuote = null;
+    } else if (available > 0) {
+      const averageCost = basis / available;
+      const costRemoved = Math.min(trade.tokenAmount, available) * averageCost;
+      if (profile.realizedPnlQuote != null) profile.realizedPnlQuote += trade.quoteAmount - costRemoved;
+      profile.trackedTokenBalance = Math.max(0, available - trade.tokenAmount);
+      profile.remainingObservedCostBasisQuote = Math.max(0, basis - costRemoved);
+    }
     profile.lastSellAt = context.observedAt;
   }
   profile.observedNetTokenChange = profile.tokenBought - profile.tokenSold;
@@ -223,6 +262,9 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     creatorEstimatedBuyQuote: creators.reduce((n, p) => n + p.estimatedQuoteSpent, 0),
     creatorEstimatedSellQuote: creators.reduce((n, p) => n + p.estimatedQuoteReceived, 0),
     creatorObservedNetTokenChange: creators.reduce((n, p) => n + p.observedNetTokenChange, 0),
+    creatorRemainingObservedCostBasisQuote: creators.reduce((n, p) => n + (p.remainingObservedCostBasisQuote ?? 0), 0),
+    creatorRealizedPnlQuote: creators.every(p => p.realizedPnlQuote != null) ? creators.reduce((n, p) => n + (p.realizedPnlQuote ?? 0), 0) : null,
+    creatorSellExceedsObservedBuysWallets: creators.filter(p => p.sellExceedsObservedBuys).map(p => p.wallet),
     creatorTokensBought: creators.reduce((n, p) => n + p.tokenBought, 0),
     creatorTokensSold: creators.reduce((n, p) => n + p.tokenSold, 0),
     launchFeePayerBuyQuote: devFeePayers.reduce((n, p) => n + p.quoteSpent, 0),
@@ -233,11 +275,14 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     sniperSellQuote: snipers.reduce((n, p) => n + p.quoteReceived, 0),
     sniperTokensBought: snipers.reduce((n, p) => n + p.tokenBought, 0),
     sniperTokensSold: snipers.reduce((n, p) => n + p.tokenSold, 0),
+    sniperRealizedPnlQuote: snipers.every(p => p.realizedPnlQuote != null) ? snipers.reduce((n, p) => n + (p.realizedPnlQuote ?? 0), 0) : null,
+    sniperSameLaunchSlotWalletCount: snipers.filter(p => p.sameSlotAsLaunch).length,
     botCandidateBuyQuote: bots.reduce((n, p) => n + p.quoteSpent, 0),
     botCandidateSellQuote: bots.reduce((n, p) => n + p.quoteReceived, 0),
     botCandidateTokensBought: bots.reduce((n, p) => n + p.tokenBought, 0),
     botCandidateTokensSold: bots.reduce((n, p) => n + p.tokenSold, 0),
-    topBuyerWallets: topBuyers.map(p => ({ wallet: p.wallet, quoteSpent: p.quoteSpent, exactQuoteSpent: p.exactQuoteSpent, estimatedQuoteSpent: p.estimatedQuoteSpent, tokenBought: p.tokenBought, transactionCount: p.transactionCount, exactTransactionCount: p.exactTransactionCount, estimatedTransactionCount: p.estimatedTransactionCount, sniperCandidate: p.sniperCandidate, botScore: p.botScore })),
+    botCandidateRealizedPnlQuote: bots.every(p => p.realizedPnlQuote != null) ? bots.reduce((n, p) => n + (p.realizedPnlQuote ?? 0), 0) : null,
+    topBuyerWallets: topBuyers.map(p => ({ wallet: p.wallet, quoteSpent: p.quoteSpent, exactQuoteSpent: p.exactQuoteSpent, estimatedQuoteSpent: p.estimatedQuoteSpent, tokenBought: p.tokenBought, transactionCount: p.transactionCount, exactTransactionCount: p.exactTransactionCount, estimatedTransactionCount: p.estimatedTransactionCount, sniperCandidate: p.sniperCandidate, botScore: p.botScore, firstBuyElapsedSeconds: p.firstBuyElapsedSeconds, firstBuySlot: p.firstBuySlot, sameSlotAsLaunch: p.sameSlotAsLaunch, realizedPnlQuote: p.realizedPnlQuote, trackedTokenBalance: p.trackedTokenBalance, sellExceedsObservedBuys: p.sellExceedsObservedBuys })),
     topSellerWallets: topSellers.map(p => ({ wallet: p.wallet, quoteReceived: p.quoteReceived, exactQuoteReceived: p.exactQuoteReceived, estimatedQuoteReceived: p.estimatedQuoteReceived, tokenSold: p.tokenSold, transactionCount: p.transactionCount, creator: p.creator, botScore: p.botScore })),
     sameSlotEntryGroups: [...sameSlotGroups.entries()].filter(([, members]) => members.length > 1)
       .map(([slot, members]) => ({ slot, wallets: [...new Set(members)] })),
