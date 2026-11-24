@@ -351,7 +351,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
     // Never substitute wallet-balance estimates for the authoritative bonding-curve price.
-    const hasCurvePrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves";
+    const hasCurvePrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
     const priceSol = hasCurvePrice ? metrics.lastPriceSol : null;
     const priceUsd = hasCurvePrice ? metrics.lastPriceUsd : null;
     const supply = item.supplyUi ?? null;
@@ -470,7 +470,7 @@ async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string,
   const poolInfo = await connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
   if (!poolInfo || !poolInfo.owner.equals(new PublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"))) return;
   const pool = decodePumpSwapPoolState(poolInfo.data);
-  if (!pool || pool.baseMint !== item.mint || (item.quoteMint && pool.quoteMint !== item.quoteMint)) return;
+  if (!pool || pool.baseMint !== item.mint || ((item.quoteMint ?? item.metrics?.quoteMint) && pool.quoteMint !== (item.quoteMint ?? item.metrics?.quoteMint))) return;
   const [baseVaultInfo, quoteVaultInfo, quoteDecimals] = await Promise.all([
     connection.getAccountInfo(new PublicKey(pool.baseVault), "confirmed"),
     connection.getAccountInfo(new PublicKey(pool.quoteVault), "confirmed"),
@@ -541,7 +541,7 @@ async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string,
 
 async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
   const sub = activeSubscriptions.get(item.mint);
-  if (!sub || sub.ammPoolAddress === poolAddress) return;
+  if (!sub || (sub.ammPoolAddress === poolAddress && (sub.ammIds?.length ?? 0) > 0)) return;
   if (sub.ammIds) {
     for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
   }
@@ -556,7 +556,7 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
     const poolInfo = await sub.connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
     if (!poolInfo) return;
     const pool = decodePumpSwapPoolState(poolInfo.data);
-    if (!pool || pool.baseMint !== item.mint || (item.quoteMint && pool.quoteMint !== item.quoteMint)) return;
+    if (!pool || pool.baseMint !== item.mint || ((item.quoteMint ?? item.metrics?.quoteMint) && pool.quoteMint !== (item.quoteMint ?? item.metrics?.quoteMint))) return;
     const poolId = await sub.connection.onAccountChange(new PublicKey(poolAddress), (_info, context) => refresh(context.slot), "confirmed");
     const baseVaultId = await sub.connection.onAccountChange(new PublicKey(pool.baseVault), (_info, context) => refresh(context.slot), "confirmed");
     const quoteVaultId = await sub.connection.onAccountChange(new PublicKey(pool.quoteVault), (_info, context) => refresh(context.slot), "confirmed");
@@ -886,7 +886,8 @@ async function stopCapture(mint: string) {
   if (sub) {
     if (sub.timer) clearInterval(sub.timer);
     try { await sub.connection.removeOnLogsListener(sub.id); } catch {}
-    if (sub.curveId != null) { try { await sub.connection.removeAccountChangeListener(sub.curveId); } catch {} }\n    if (sub.ammIds) for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
+    if (sub.curveId != null) { try { await sub.connection.removeAccountChangeListener(sub.curveId); } catch {} }
+    if (sub.ammIds) for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
     activeSubscriptions.delete(mint);
   }
 }
