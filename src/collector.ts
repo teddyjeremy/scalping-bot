@@ -776,6 +776,10 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   if (metrics.priceSource === "decoded_program_trade_event" || metrics.priceSource === "owner_balance_delta_estimate") {
     metrics.highPriceQuote = metrics.highPriceQuote == null ? latest.priceQuote : Math.max(metrics.highPriceQuote, latest.priceQuote);
     metrics.lowPriceQuote = metrics.lowPriceQuote == null ? latest.priceQuote : Math.min(metrics.lowPriceQuote, latest.priceQuote);
+    if (latest.priceUsd != null) {
+      metrics.highPriceUsd = metrics.highPriceUsd == null ? latest.priceUsd : Math.max(metrics.highPriceUsd, latest.priceUsd);
+      metrics.lowPriceUsd = metrics.lowPriceUsd == null ? latest.priceUsd : Math.min(metrics.lowPriceUsd, latest.priceUsd);
+    }
     const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? latest.priceQuote / metrics.firstPriceQuote : 1;
     const elapsed = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
     for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
