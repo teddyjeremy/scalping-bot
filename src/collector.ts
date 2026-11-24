@@ -1342,6 +1342,7 @@ async function backfillExistingTokenMetrics() {
         item.supplyDecimals = supply.value.decimals;
         item.supplyUi = Number(supply.value.amount) / (10 ** supply.value.decimals);
       }
+      if (item.mintMetadataParsed !== true) Object.assign(item, await fetchMintRiskMetadata(item.mint));
       if (item.venue === "pumpfun" && !item.quoteMint && !metrics.quoteMint) {
         const [curveAddress] = PublicKey.findProgramAddressSync(
           [Buffer.from("bonding-curve"), new PublicKey(item.mint).toBuffer()], PUMP_PROGRAM
@@ -1351,6 +1352,7 @@ async function backfillExistingTokenMetrics() {
           const curve = decodePumpCurve(curveInfo.data);
           if (curve) {
             item.quoteMint = curve.quoteMint ?? WRAPPED_SOL_MINT;
+            if (curve.creator) item.creator = curve.creator;
             metrics.quoteMint = item.quoteMint;
             const decimals = await getMintDecimals(item.quoteMint);
             if (decimals != null) { metrics.quoteDecimals = decimals; metrics.quoteSymbol = item.quoteMint === WRAPPED_SOL_MINT ? "SOL" : item.quoteMint === USDC_MINT ? "USDC" : item.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL"; }
