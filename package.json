@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "research:wallet-graph": "node --import tsx scripts/reconstruct-wallet-graph.ts",
-    "preflight": "node --import tsx scripts/preflight.ts"
+    "preflight": "node --import tsx scripts/preflight.ts",
+    "historical:archive": "node --import tsx scripts/historical-archive.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
