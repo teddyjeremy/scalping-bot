@@ -142,13 +142,6 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         if local_summary.is_file():
             summary = json.loads(local_summary.read_text(encoding="utf-8"))
 
-    checkpoint = ROOT / "checkpoint.json"
-    if checkpoint.is_file():
-        cp_remote = f"{REMOTE_ROOT}/control/checkpoint.json"
-        cp_hash = upload_verified(cp_remote, checkpoint.read_bytes(), "Publish resumable collection checkpoint")
-        paths.add(cp_remote)
-        hashes[cp_remote] = cp_hash
-
     capture_complete = bool((summary or {}).get("capture", {}).get("complete"))
     ledger.update({
         "schema_version": "3.0.0",
@@ -183,6 +176,10 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
     )).read_bytes()
     if digest(remote_ledger) != digest(ledger_bytes):
         raise RuntimeError(f"Ledger readback verification failed for {venue}/{mint}")
+    # The coin data and its ledger are durable before the global resume cursor advances.
+    checkpoint = ROOT / "checkpoint.json"
+    if checkpoint.is_file():
+        upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint after coin ledger")
     print(f"V3 published {venue}/{mint}: state={ledger['state']} files={len(paths)} verified=true")
 
 
@@ -256,7 +253,36 @@ def restore():
                             page_dir.mkdir(parents=True, exist_ok=True)
                             for page in pages.glob("*.jsonl"):
                                 shutil.copy2(page, page_dir / page.name)
-    print("Restored only dataset_v3 checkpoint and coin files. Legacy historical generations were not imported.")
+    # Reconcile completed per-coin ledgers in case a run stopped after a coin
+    # ledger commit but before the global checkpoint upload.
+    checkpoint_file = ROOT / "checkpoint.json"
+    checkpoint_state = {}
+    if checkpoint_file.is_file():
+        checkpoint_state = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    checkpoint_state.setdefault("tradeCursors", {})
+    ledgers = base / "control" / "ledger"
+    if ledgers.exists():
+        for ledger_file in ledgers.rglob("*.json"):
+            try:
+                ledger = json.loads(ledger_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if ledger.get("state") != "COMPLETE":
+                continue
+            mint = ledger.get("mint")
+            if not mint:
+                continue
+            capture = ledger.get("capture") or {}
+            source_states = capture.get("sources") or {}
+            checkpoint_state["tradeCursors"][mint] = {
+                "complete": True,
+                "pages": int(capture.get("totalSourcePages") or 0),
+                "sources": {address: {"complete": bool(info.get("complete", True)), "pages": int(info.get("pages") or 0)}
+                            for address, info in source_states.items()},
+            }
+    if checkpoint_state:
+        checkpoint_file.write_text(json.dumps(checkpoint_state, indent=2) + "\\n", encoding="utf-8")
+    print("Restored dataset_v3 files and checkpoint; COMPLETE coin ledgers were reconciled. Legacy generations were not imported.")
 
 
 def write_test():
