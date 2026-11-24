@@ -21,6 +21,7 @@ const connections = keys.map(key => new Connection(`https://mainnet.helius-rpc.c
 let rpcCursor = 0;
 const cooldown = new Map<number, number>();
 const lastStarted = new Map<number, number>();
+const rpcTails = new Map<number, Promise<void>>();
 async function rpc<T>(method: string, run: (connection: Connection) => Promise<T>): Promise<T> {
   let lastError: unknown;
   const tried = new Set<number>();
@@ -31,11 +32,17 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
       if (!tried.has(candidate) && (cooldown.get(candidate) ?? 0) <= Date.now()) { index = candidate; break; }
     }
     if (index < 0) { await new Promise(resolve => setTimeout(resolve, 1_000)); continue; }
-    tried.add(index); rpcCursor = (index + 1) % connections.length;
-    const wait = Math.max(0, 100 - (Date.now() - (lastStarted.get(index) ?? 0)));
-    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-    lastStarted.set(index, Date.now());
-    try { return await run(connections[index]); }
+    tried.add(index);
+    rpcCursor = (index + 1) % connections.length;
+    const previous = rpcTails.get(index) ?? Promise.resolve();
+    const request = previous.then(async () => {
+      const wait = Math.max(0, 100 - (Date.now() - (lastStarted.get(index) ?? 0)));
+      if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+      lastStarted.set(index, Date.now());
+      return run(connections[index]);
+    });
+    rpcTails.set(index, request.then(() => undefined, () => undefined));
+    try { return await request; }
     catch (error) {
       lastError = error;
       const message = String(error);
@@ -115,9 +122,9 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   while (pages < MAX_PAGES) {
     const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(program), { limit: PAGE_SIZE, ...(before ? { before } : {}) }, "confirmed"));
     if (!signatures.length) { progress.complete = true; break; }
-    const eligible = signatures.filter(s => s.blockTime != null && s.blockTime >= START && s.blockTime < END);
-    for (const entry of eligible.reverse()) {
-      const tx = await fetchTx(entry.signature);
+    const eligible = signatures.filter(s => s.blockTime != null && s.blockTime >= START && s.blockTime < END).reverse();
+    const hydrated = await Promise.all(eligible.map(async entry => ({ entry, tx: await fetchTx(entry.signature) })));
+    for (const { entry, tx } of hydrated) {
       if (!tx) throw new Error(`Missing historical transaction ${entry.signature}; checkpoint remains on this page.`);
       if (!tx.meta?.err) {
         const top = instructions(tx);
