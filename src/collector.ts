@@ -4,6 +4,7 @@ import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
+import { calculateHolderConcentration } from "./research-metrics.js";
 import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "./wallet-analytics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { decodeProgramTradeEvents } from "./trade-events.js";
@@ -421,6 +422,7 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
   const walletHolders = [...ownerTotals.entries()].map(([owner, amount]) => ({
     owner, amount, sharePct: amount / item.supplyUi! * 100
   })).sort((a, b) => b.amount - a.amount);
+  const top20Concentration = calculateHolderConcentration(walletHolders);
   const walletShare = (count: number) => walletHolders.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
   const accountShare = (count: number) => sorted.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
   const creatorHolding = item.creator ? ownerTotals.has(item.creator) ? ownerTotals.get(item.creator)! / item.supplyUi * 100 : 0 : null;
@@ -432,6 +434,9 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
     uniqueWalletOwnersInTop20: walletHolders.length,
     excludedPoolVaultCount: holders.filter(holder => holder.isPoolVault).length,
     largestHolderSharePct: walletHolders[0]?.sharePct ?? null,
+    top20ConcentrationHhi: top20Concentration.hhi,
+    top20EffectiveHolderCount: top20Concentration.effectiveHolderCount,
+    top20HolderGini: top20Concentration.gini,
     top5HolderSharePct: walletShare(5), top10HolderSharePct: walletShare(10), top20HolderSharePct: walletShare(20),
     top5AccountSharePct: accountShare(5), top10AccountSharePct: accountShare(10), top20AccountSharePct: accountShare(20),
     creatorShareInTop20Pct: creatorHolding, launchFeePayerShareInTop20Pct: feePayerHolding,
