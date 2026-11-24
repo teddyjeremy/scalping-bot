@@ -34,6 +34,8 @@ export type StrategyInput = {
   paperSizeUsd?: number;
   volatilityPct?: number;
   venueFeePctPerSide?: number | null;
+  top20HolderSharePct?: number | null;
+  creatorHoldingSharePct?: number | null;
 };
 export type StrategyDecision = {
   action: "wait" | "enter" | "hold" | "exit" | "reject";
@@ -67,7 +69,11 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   const dangerSignals: string[] = [];
   if (input.creatorSelling) dangerSignals.push("creator_or_creator_fee_payer_selling");
   if (input.reserveDropPct != null && input.reserveDropPct <= -20) dangerSignals.push("curve_or_pool_quote_reserves_dropped_20_percent");
-  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_curve_price_impact_at_least_5_percent");\n  if (flaggedBuyRatio >= 0.6 && buys.length >= 3) dangerSignals.push("bot_sniper_or_bundle_candidates_dominate_early_buys");\n  if (flaggedSellRatio >= 0.5 && sells.length >= 2) dangerSignals.push("coordinated_bot_sniper_or_bundle_sell_pressure");
+  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_curve_price_impact_at_least_5_percent");
+  if (flaggedBuyRatio >= 0.6 && buys.length >= 3) dangerSignals.push("bot_sniper_or_bundle_candidates_dominate_early_buys");
+  if ((input.top20HolderSharePct ?? 0) > 95) dangerSignals.push("extreme_top20_holder_concentration");
+  if ((input.creatorHoldingSharePct ?? 0) > 40) dangerSignals.push("creator_controls_over_40_percent_of_supply");
+  if (flaggedSellRatio >= 0.5 && sells.length >= 2) dangerSignals.push("coordinated_bot_sniper_or_bundle_sell_pressure");
   if (position?.status === "open") {
     if (input.price == null || input.price <= 0) return { action: "hold", score, reasons: ["price_feed_missing_or_invalid_hold_last_known_mark"], dangerSignals: [...dangerSignals, "price_feed_missing_or_invalid"], position };
     const drawdown = position.peakPrice > 0 ? (input.price / position.peakPrice - 1) * 100 : 0;
