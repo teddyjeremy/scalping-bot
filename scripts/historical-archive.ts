@@ -115,7 +115,6 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     if (!signatures.length) { progress.complete = true; break; }
     const eligible = signatures.filter(s => s.blockTime != null && s.blockTime >= START && s.blockTime < END);
     for (const entry of eligible.reverse()) {
-      if (state.processedSignatures.includes(entry.signature)) continue;
       const tx = await fetchTx(entry.signature);
       if (!tx) throw new Error(`Missing historical transaction ${entry.signature}; checkpoint remains on this page.`);
       if (!tx.meta?.err) {
@@ -131,8 +130,6 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
           console.log(`Archived ${venue} launch ${launch.mint} at ${new Date(entry.blockTime! * 1000).toISOString()}`);
         }
       }
-      state.processedSignatures.push(entry.signature);
-      if (state.processedSignatures.length > 100_000) state.processedSignatures = state.processedSignatures.slice(-50_000);
     }
     before = signatures[signatures.length - 1].signature;
     progress.before = before;
