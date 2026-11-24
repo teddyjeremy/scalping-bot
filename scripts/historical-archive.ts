@@ -437,7 +437,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   let transactionObservations = 0;
   const observedTransactions = new Set<string>();
   const coverageBuckets = new Map<number, number>();
-  const observedOffsets: number[] = [];
+  let earliestObservedOffset: number | null = null;
+  let latestObservedOffset: number | null = null;
   let missingDecimalEvents = 0;
   let duplicateEvents = 0;
   for (const name of names) {
@@ -453,7 +454,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         if (signature) observedTransactions.add(signature);
         const offset = Number(event.secondsSinceLaunch);
         if (Number.isFinite(offset) && offset >= 0 && offset <= CAPTURE_SECONDS) {
-          observedOffsets.push(offset);
+          earliestObservedOffset = earliestObservedOffset == null ? offset : Math.min(earliestObservedOffset, offset);
+          latestObservedOffset = latestObservedOffset == null ? offset : Math.max(latestObservedOffset, offset);
           const bucket = Math.min(Math.floor(offset / 10), 59);
           coverageBuckets.set(bucket, (coverageBuckets.get(bucket) ?? 0) + 1);
         }
@@ -565,8 +567,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         observedTransactionCount: observedTransactions.size,
         observedBuckets: [...coverageBuckets.keys()].sort((a, b) => a - b),
         emptyBuckets: Array.from({ length: 60 }, (_, index) => index).filter(index => !coverageBuckets.has(index)),
-        earliestObservedSecondsAfterLaunch: observedOffsets.length ? Math.min(...observedOffsets) : null,
-        latestObservedSecondsAfterLaunch: observedOffsets.length ? Math.max(...observedOffsets) : null,
+        earliestObservedSecondsAfterLaunch: earliestObservedOffset,
+        latestObservedSecondsAfterLaunch: latestObservedOffset,
         gapAccountingComplete: state.tradeCursors?.[record.mint]?.complete === true,
         bucketInterpretation: "A zero-count bucket means no transaction was returned for the scanned mint, curve, or discovered pool addresses; it is not proof that no off-address activity occurred."
       },
