@@ -256,31 +256,29 @@ def restore():
     # Reconcile completed per-coin ledgers in case a run stopped after a coin
     # ledger commit but before the global checkpoint upload.
     checkpoint_file = ROOT / "checkpoint.json"
-    checkpoint_state = {}
     if checkpoint_file.is_file():
         checkpoint_state = json.loads(checkpoint_file.read_text(encoding="utf-8"))
-    checkpoint_state.setdefault("tradeCursors", {})
-    ledgers = base / "control" / "ledger"
-    if ledgers.exists():
-        for ledger_file in ledgers.rglob("*.json"):
-            try:
-                ledger = json.loads(ledger_file.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if ledger.get("state") != "COMPLETE":
-                continue
-            mint = ledger.get("mint")
-            if not mint:
-                continue
-            capture = ledger.get("capture") or {}
-            source_states = capture.get("sources") or {}
-            checkpoint_state["tradeCursors"][mint] = {
-                "complete": True,
-                "pages": int(capture.get("totalSourcePages") or 0),
-                "sources": {address: {"complete": bool(info.get("complete", True)), "pages": int(info.get("pages") or 0)}
-                            for address, info in source_states.items()},
-            }
-    if checkpoint_state:
+        checkpoint_state.setdefault("tradeCursors", {})
+        ledgers = base / "control" / "ledger"
+        if ledgers.exists():
+            for ledger_file in ledgers.rglob("*.json"):
+                try:
+                    ledger = json.loads(ledger_file.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if ledger.get("state") != "COMPLETE":
+                    continue
+                mint = ledger.get("mint")
+                if not mint:
+                    continue
+                capture = ledger.get("capture") or {}
+                source_states = capture.get("sources") or {}
+                checkpoint_state["tradeCursors"][mint] = {
+                    "complete": True,
+                    "pages": int(capture.get("totalSourcePages") or 0),
+                    "sources": {address: {"complete": bool(info.get("complete", True)), "pages": int(info.get("pages") or 0)}
+                                for address, info in source_states.items()},
+                }
         checkpoint_file.write_text(json.dumps(checkpoint_state, indent=2) + "\\n", encoding="utf-8")
     print("Restored dataset_v3 files and checkpoint; COMPLETE coin ledgers were reconciled. Legacy generations were not imported.")
 
