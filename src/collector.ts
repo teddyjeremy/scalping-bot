@@ -468,7 +468,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number, skipHold
       const isStonkReferenceOnly = isStonkFun && metrics.priceSource !== "decoded_program_trade_event" && metrics.priceSource !== "raydium_cpmm_vault_reserves";
       await appendTokenEvent(item.mint, {
         schemaVersion: 7, kind: "market_snapshot", mint: item.mint,
-        elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
+        elapsedSeconds: seconds, observedAt, observedElapsedSeconds: elapsedSeconds,
+        snapshotDelaySeconds: Math.max(0, elapsedSeconds - seconds),
+        snapshotTimingMethod: skipHolderSnapshots ? "chronological_replay_first_event_at_or_after_target" : "live_interval_or_pool_update",
+        priceSol, priceUsd,
         priceQuote: isStonkReferenceOnly ? null : metrics.lastPriceQuote ?? null,
         ownerBalancePriceQuoteEstimate: isStonkReferenceOnly && metrics.priceSource === "owner_balance_delta_estimate" ? metrics.lastPriceQuote ?? null : null,
         reserveRatioQuotePerBase: isStonkFun ? metrics.launchlabReserveRatioQuote ?? null : null,
