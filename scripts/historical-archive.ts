@@ -133,8 +133,8 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     const eligible = signatures.filter(s => s.blockTime != null && s.blockTime >= START && s.blockTime < END).reverse();
     const hydrated = await Promise.all(eligible.map(async entry => ({ entry, tx: await fetchTx(entry.signature) })));
     for (const { entry, tx } of hydrated) {
-      if (!tx) throw new Error(`Missing historical transaction ${entry.signature}; checkpoint remains on this page.`);
-      if (!tx.meta?.err) {
+      if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
+      if (!tx.meta.err) {
         const top = instructions(tx);
         const launches = venue === "pumpfun"
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
@@ -193,7 +193,11 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       const hydrated = await Promise.all(candidates.map(async item => ({ item, tx: await fetchTx(item.signature) })));
       const lines: string[] = [];
       for (const { item, tx } of hydrated) {
-        if (!tx?.meta || tx.meta.err) continue;
+        if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${item.signature}; checkpoint remains on this page.`);
+        if (tx.meta.err) {
+          lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime! - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
+          continue;
+        }
         const txInstructions = instructions(tx);
         const pumpPool = findPumpSwapPoolFromInstructions(txInstructions, record.mint);
         const launchLabMigration = findLaunchLabCpmmMigration(txInstructions, record.mint);
