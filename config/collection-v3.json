@@ -75,5 +75,16 @@
     "unknown",
     "unavailable"
   ],
-  "output_root": "dataset_v3"
+  "output_root": "dataset_v3",
+  "provider_access": {
+    "helius_getTransactionsForAddress": {
+      "transaction_details": "full",
+      "maximum_full_transaction_records_per_page": 100,
+      "documented_credits_per_call": 100,
+      "paid_plan_access_required": true,
+      "fallback_when_unavailable_or_credit_limited": "standard_getSignaturesForAddress_plus_getTransaction"
+    },
+    "api_keys": "three_distinct_keys_preflight_authenticated",
+    "no_data_collection_during_preflight": true
+  }
 }
