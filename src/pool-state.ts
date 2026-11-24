@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import { decodeBase58 } from "./pump-instructions.js";
 
 const LAUNCHLAB_POOL_STATE_DISCRIMINATOR = Buffer.from([247, 237, 227, 245, 215, 195, 222, 70]);
 const PUMP_SWAP_POOL_DISCRIMINATOR = Buffer.from([241, 154, 109, 4, 17, 177, 109, 188]);
@@ -110,4 +111,28 @@ export function decodeTokenAccountAmount(data: Buffer, expectedMint: string): bi
   if (data.length < 72) return null;
   if (readKey(data, 0) !== expectedMint) return null;
   return data.readBigUInt64LE(64);
+}
+
+const PUMP_SWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+const PUMP_SWAP_SWAP_DISCRIMINATORS = new Set(["66063d1201daebea", "33e685a4017f83ad"]);
+
+export function findPumpSwapPoolFromInstructions(
+  instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
+  mint: string
+): { pool: string; quoteMint: string; side: "buy" | "sell" } | null {
+  for (const instruction of instructions) {
+    if (String(instruction.programId ?? "") !== PUMP_SWAP_PROGRAM_ID) continue;
+    if (typeof instruction.data !== "string" || !Array.isArray(instruction.accounts) || instruction.accounts.length < 5) continue;
+    let bytes: Uint8Array;
+    try { bytes = decodeBase58(instruction.data); } catch { continue; }
+    if (bytes.length < 8) continue;
+    const discriminator = [...bytes.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    if (!PUMP_SWAP_SWAP_DISCRIMINATORS.has(discriminator)) continue;
+    const pool = String(instruction.accounts[0] ?? "");
+    const baseMint = String(instruction.accounts[3] ?? "");
+    const quoteMint = String(instruction.accounts[4] ?? "");
+    if (!pool || baseMint !== mint || !quoteMint) continue;
+    return { pool, quoteMint, side: discriminator === "66063d1201daebea" ? "buy" : "sell" };
+  }
+  return null;
 }
