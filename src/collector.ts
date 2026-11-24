@@ -357,56 +357,124 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   await recordDueSnapshots(item, Date.now());
   await persistState();
 }
+async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds: number, slot: number) {
+  if (item.supplyUi == null || item.supplyUi <= 0) return false;
+  const connection = nextRpc();
+  const largest = await connection.getTokenLargestAccounts(new PublicKey(item.mint), "confirmed");
+  const addresses = largest.value.map(entry => entry.address);
+  if (addresses.length === 0) return false;
+  const accounts = await connection.getMultipleAccountsInfo(addresses, "confirmed");
+  const excluded = new Set<string>();
+  if (item.poolAddress) {
+    try {
+      const info = await connection.getAccountInfo(new PublicKey(item.poolAddress), "confirmed");
+      if (info) {
+        const decoded = decodeLaunchLabPoolState(info.data);
+        if (decoded) { excluded.add(decoded.baseVault); excluded.add(decoded.quoteVault); }
+      }
+    } catch {}
+  }
+  if (item.pumpSwapPoolAddress) {
+    try {
+      const info = await connection.getAccountInfo(new PublicKey(item.pumpSwapPoolAddress), "confirmed");
+      if (info) {
+        const decoded = decodePumpSwapPoolState(info.data);
+        if (decoded) { excluded.add(decoded.baseVault); excluded.add(decoded.quoteVault); }
+      }
+    } catch {}
+  }
+  const holders = largest.value.flatMap((entry, index) => {
+    const account = accounts[index];
+    if (!account || account.data.length < 64) return [];
+    const address = entry.address.toBase58();
+    const owner = new PublicKey(account.data.subarray(32, 64)).toBase58();
+    const amount = Number(entry.amount) / (10 ** item.supplyDecimals!);
+    if (!Number.isFinite(amount) || amount < 0) return [];
+    const isPoolVault = excluded.has(address);
+    return [{ tokenAccount: address, owner, amount, sharePct: amount / item.supplyUi! * 100, isPoolVault }];
+  });
+  const circulatingCandidates = holders.filter(holder => !holder.isPoolVault);
+  const sorted = [...circulatingCandidates].sort((a, b) => b.amount - a.amount);
+  const topShare = (count: number) => sorted.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
+  const creatorHolding = item.creator ? sorted.filter(holder => holder.owner === item.creator).reduce((sum, holder) => sum + holder.sharePct, 0) : null;
+  const feePayerHolding = item.launchFeePayer ? sorted.filter(holder => holder.owner === item.launchFeePayer).reduce((sum, holder) => sum + holder.sharePct, 0) : null;
+  await appendTokenEvent(item.mint, {
+    schemaVersion: 7, kind: "holder_distribution_snapshot", mint: item.mint, slot, elapsedSeconds, observedAt: Date.now(),
+    holderScope: "top_20_token_accounts_from_getTokenLargestAccounts",
+    holderCountReturned: holders.length, holderCountAfterPoolVaultExclusion: sorted.length,
+    excludedPoolVaultCount: holders.filter(holder => holder.isPoolVault).length,
+    largestHolderSharePct: sorted[0]?.sharePct ?? null, top5HolderSharePct: topShare(5),
+    top10HolderSharePct: topShare(10), top20HolderSharePct: topShare(20),
+    creatorShareInTop20Pct: creatorHolding, launchFeePayerShareInTop20Pct: feePayerHolding,
+    holders: sorted.map(holder => ({ ...holder, role: holder.owner === item.creator ? "creator" : holder.owner === item.launchFeePayer ? "launch_fee_payer" : "holder" })),
+    excludesKnownPoolVaults: true, concentrationIsTop20Only: true,
+    note: "Top token accounts only; owner balances outside the top 20 and off-token-account custody are not included."
+  });
+  return true;
+}
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
-  // Wait for the bonding-curve account; do not permanently record empty/estimated snapshots.
   const isStonkFun = item.venue === "stonkfun";
   const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
   if (!hasPrimaryPrice && !isStonkFun) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
+  metrics.holderSnapshotsRecorded ??= [];
   for (const seconds of SNAPSHOT_SECONDS) {
-    if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
-    // Never substitute wallet-balance estimates for the authoritative bonding-curve price.
-    const priceSol = hasPrimaryPrice ? metrics.lastPriceSol : null;
-    const priceUsd = hasPrimaryPrice ? metrics.lastPriceUsd : null;
-    const supply = item.supplyUi ?? null;
-    const marketCapSol = marketCap(priceSol, supply);
-    const marketCapUsd = marketCap(priceUsd, supply);
-    const priceChangePct = metrics.firstPriceQuote && metrics.lastPriceQuote != null
-      ? ((metrics.lastPriceQuote / metrics.firstPriceQuote) - 1) * 100 : null;
-    await appendTokenEvent(item.mint, {
-      schemaVersion: 4, kind: "market_snapshot", mint: item.mint,
-      elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
-      priceQuote: isStonkFun ? null : metrics.lastPriceQuote ?? null,
-      ownerBalancePriceQuoteEstimate: isStonkFun ? metrics.lastPriceQuote ?? null : null,
-      reserveRatioQuotePerBase: isStonkFun ? metrics.launchlabReserveRatioQuote ?? null : null,
-      reserveRatioIsSpotPrice: false,
-      quoteMint: metrics.quoteMint ?? null,
-      quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
-      pricingMethod: isStonkFun ? "launchlab_pool_reserve_ratio_reference_only" : metrics.priceSource,
-      marketCapSol, marketCapUsd, marketCapQuote: isStonkFun ? null : marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
-      priceChangePctFromFirstObservedPrice: isStonkFun ? null : priceChangePct,
-      launchlabRealBase: isStonkFun ? metrics.launchlabRealBase ?? null : null,
-      launchlabRealQuote: isStonkFun ? metrics.launchlabRealQuote ?? null : null,
-      launchlabPoolStatus: isStonkFun ? metrics.launchlabPoolStatus ?? null : null,
-      marketCapBasis: "total_supply_fdv",
-      tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
-      volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
-      volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
-      tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
-      maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
-      largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
-      uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
-      priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
-      pricingMethod: metrics.priceSource ?? "owner_balance_delta_estimate",
-      curveComplete: metrics.curveComplete ?? null,
-      curveRealSolReserves: metrics.curveRealSolReserves ?? null,
-      curveRealQuoteReserves: metrics.curveRealQuoteReserves ?? null,
-      curveVirtualQuoteReserves: metrics.curveVirtualQuoteReserves ?? null,
-      curveRealTokenReserves: metrics.curveRealTokenReserves ?? null
-    });
-    metrics.snapshotsRecorded.push(seconds);
-    await persistState();
+    if (elapsedSeconds < seconds) continue;
+    if (!metrics.snapshotsRecorded.includes(seconds)) {
+      const priceSol = hasPrimaryPrice ? metrics.lastPriceSol : null;
+      const priceUsd = hasPrimaryPrice ? metrics.lastPriceUsd : null;
+      const supply = item.supplyUi ?? null;
+      const marketCapSol = marketCap(priceSol, supply);
+      const marketCapUsd = marketCap(priceUsd, supply);
+      const priceChangePct = metrics.firstPriceQuote && metrics.lastPriceQuote != null
+        ? ((metrics.lastPriceQuote / metrics.firstPriceQuote) - 1) * 100 : null;
+      await appendTokenEvent(item.mint, {
+        schemaVersion: 7, kind: "market_snapshot", mint: item.mint,
+        elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
+        priceQuote: isStonkFun ? null : metrics.lastPriceQuote ?? null,
+        ownerBalancePriceQuoteEstimate: isStonkFun ? metrics.lastPriceQuote ?? null : null,
+        reserveRatioQuotePerBase: isStonkFun ? metrics.launchlabReserveRatioQuote ?? null : null,
+        reserveRatioIsSpotPrice: false,
+        quoteMint: metrics.quoteMint ?? null,
+        quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
+        pricingMethod: isStonkFun ? "launchlab_pool_reserve_ratio_reference_only" : metrics.priceSource,
+        marketCapSol, marketCapUsd, marketCapQuote: isStonkFun ? null : marketCap(metrics.lastPriceQuote ?? null, supply),
+        marketCapBasis: "total_supply_fdv", totalSupply: supply,
+        priceChangePctFromFirstObservedPrice: isStonkFun ? null : priceChangePct,
+        launchlabRealBase: isStonkFun ? metrics.launchlabRealBase ?? null : null,
+        launchlabRealQuote: isStonkFun ? metrics.launchlabRealQuote ?? null : null,
+        launchlabPoolStatus: isStonkFun ? metrics.launchlabPoolStatus ?? null : null,
+        tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
+        volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
+        volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
+        tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
+        maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
+        largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol,
+        largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
+        uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
+        walletCohorts: metrics.walletCohorts ?? summarizeWalletCohorts(metrics.walletProfiles),
+        priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
+        curveComplete: metrics.curveComplete ?? null,
+        curveRealSolReserves: metrics.curveRealSolReserves ?? null,
+        curveRealQuoteReserves: metrics.curveRealQuoteReserves ?? null,
+        curveVirtualQuoteReserves: metrics.curveVirtualQuoteReserves ?? null,
+        curveRealTokenReserves: metrics.curveRealTokenReserves ?? null
+      });
+      metrics.snapshotsRecorded.push(seconds);
+      await persistState();
+    }
+    if (!metrics.holderSnapshotsRecorded.includes(seconds)) {
+      try {
+        const recorded = await recordHolderDistributionSnapshot(item, seconds, 0);
+        if (recorded) {
+          metrics.holderSnapshotsRecorded.push(seconds);
+          await persistState();
+        }
+      } catch (error) {
+        console.warn("Holder distribution snapshot failed; will retry:", item.mint, seconds, String(error).slice(0, 140));
+      }
+    }
   }
 }
 function refreshWalletCohorts(item: TokenState) {
