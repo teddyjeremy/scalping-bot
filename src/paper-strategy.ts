@@ -1,4 +1,4 @@
-export type RecentTradeSignal = { at: number; side: "buy" | "sell"; quoteAmount: number; wallet: string; isCreator?: boolean; botScore?: number; confidence: "high" | "low"; priceUsd?: number | null };
+export type RecentTradeSignal = { at: number; side: "buy" | "sell"; quoteAmount: number; wallet: string; isCreator?: boolean; botScore?: number; sniperCandidate?: boolean; bundleCandidate?: boolean; confidence: "high" | "low"; priceUsd?: number | null };
 export type PaperPosition = {
   status: "open" | "closed";
   entryAt: number;
@@ -51,6 +51,10 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   const buyVolume = buys.reduce((sum, t) => sum + t.quoteAmount, 0);
   const sellVolume = sells.reduce((sum, t) => sum + t.quoteAmount, 0);
   const uniqueBuyers = new Set(buys.map(t => t.wallet)).size;
+  const flaggedBuys = buys.filter(t => (t.botScore ?? 0) >= 50 || t.sniperCandidate === true || t.bundleCandidate === true).length;
+  const flaggedBuyRatio = buys.length ? flaggedBuys / buys.length : 0;
+  const flaggedSells = sells.filter(t => (t.botScore ?? 0) >= 50 || t.sniperCandidate === true || t.bundleCandidate === true).length;
+  const flaggedSellRatio = sells.length ? flaggedSells / sells.length : 0;
   const sellBuyRatio = buyVolume > 0 ? sellVolume / buyVolume : sells.length ? Infinity : 0;
   const scoreParts = {
     buyPressure: buyVolume > 0 && sellBuyRatio < 0.65 ? 25 : buyVolume > sellVolume ? 15 : 0,
@@ -63,7 +67,7 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   const dangerSignals: string[] = [];
   if (input.creatorSelling) dangerSignals.push("creator_or_creator_fee_payer_selling");
   if (input.reserveDropPct != null && input.reserveDropPct <= -20) dangerSignals.push("curve_or_pool_quote_reserves_dropped_20_percent");
-  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_curve_price_impact_at_least_5_percent");
+  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_curve_price_impact_at_least_5_percent");\n  if (flaggedBuyRatio >= 0.6 && buys.length >= 3) dangerSignals.push("bot_sniper_or_bundle_candidates_dominate_early_buys");\n  if (flaggedSellRatio >= 0.5 && sells.length >= 2) dangerSignals.push("coordinated_bot_sniper_or_bundle_sell_pressure");
   if (position?.status === "open") {
     if (input.price == null || input.price <= 0) return { action: "hold", score, reasons: ["price_feed_missing_or_invalid_hold_last_known_mark"], dangerSignals: [...dangerSignals, "price_feed_missing_or_invalid"], position };
     const drawdown = position.peakPrice > 0 ? (input.price / position.peakPrice - 1) * 100 : 0;
