@@ -35,7 +35,7 @@ test("trade flow separates buy and sell pressure by time window", () => {
 
 test("holder concentration returns HHI, effective holders and Gini", () => {
   const result = calculateHolderConcentration([{ amount: 90 }, { amount: 10 }]);
-  assert.equal(result.hhi, 0.82);
+  assert.ok(Math.abs(result.hhi - 0.82) < 1e-12);
   assert.ok(result.effectiveHolderCount != null && result.effectiveHolderCount < 2);
   assert.equal(result.gini, 0.4);
 });
