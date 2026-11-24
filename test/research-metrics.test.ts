@@ -5,6 +5,7 @@ import {
   calculatePricePathMetrics,
   calculateTradeFlowMetrics,
   estimateConstantProductSwap,
+  estimatePumpBondingCurveSwap,
   reconstructTokenResearch
 } from "../src/research-metrics.js";
 
@@ -47,6 +48,29 @@ test("constant product estimate accounts for fee and worsens with larger orders"
   assert.ok(small.amountOut < 1);
   assert.ok(large.priceImpactPct > small.priceImpactPct);
   assert.equal(small.method, "constant_product_reserve_approximation_not_executable_quote");
+});
+
+test("Pump bonding-curve estimate applies quote fees correctly on buys and sells", () => {
+  const buy = estimatePumpBondingCurveSwap({
+    virtualBaseReserve: 1_000, virtualQuoteReserve: 1_000, amountIn: 10,
+    side: "buy", protocolFeeBps: 95, creatorFeeBps: 30
+  });
+  const sell = estimatePumpBondingCurveSwap({
+    virtualBaseReserve: 1_000, virtualQuoteReserve: 1_000, amountIn: 10,
+    side: "sell", protocolFeeBps: 95, creatorFeeBps: 30
+  });
+  assert.ok(buy && sell);
+  assert.equal(buy.totalFeeBps, 125);
+  assert.ok(buy.quoteFee > 0);
+  assert.ok(buy.amountOut > 0 && buy.amountOut < 10);
+  assert.ok(sell.quoteGross > sell.quoteNet);
+  assert.ok(sell.amountOut < sell.quoteGross);
+  assert.ok(buy.priceImpactPct > 0);
+  assert.ok(sell.priceImpactPct > 0);
+  assert.equal(estimatePumpBondingCurveSwap({
+    virtualBaseReserve: 1_000, virtualQuoteReserve: 1_000, amountIn: 10,
+    side: "buy", protocolFeeBps: 9_000, creatorFeeBps: 1_000
+  }), null);
 });
 
 test("reconstruction aggregates raw trade and fee events", () => {
