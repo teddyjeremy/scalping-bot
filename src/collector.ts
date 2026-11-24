@@ -83,6 +83,7 @@ const qualityPath = path.join(DATA_DIR, "quality", "data-quality-manifest.json")
 let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string[]; quarantinedMints: Record<string, Record<string, unknown>> } = {
   schemaVersion: 1, generatedAt: Date.now(), rules: [
     "Only launch records whose top-level Pump instruction data matches the official create/create_v2 discriminator and whose first instruction account is a token mint are eligible.",
+    "StonkFun launches require a LaunchLab initializer discriminator, the LaunchLab program ID, a known StonkFun platform-config account and a verified token-mint owner.",
     "A mint directory listed in quarantinedMints is excluded from strategy research; raw evidence is retained for audit.",
     "Wallet-balance-delta trade estimates are low confidence and are not execution prices or exact volumes."
   ], quarantinedMints: {}
@@ -784,6 +785,8 @@ async function loadState() {
       qualityManifest = JSON.parse(await readFile(qualityPath, "utf8")) as typeof qualityManifest;
       qualityManifest.quarantinedMints ??= {};
       qualityManifest.rules ??= [];
+      const stonkRule = "StonkFun launches require a LaunchLab initializer discriminator, the LaunchLab program ID, a known StonkFun platform-config account and a verified token-mint owner.";
+      if (!qualityManifest.rules.includes(stonkRule)) qualityManifest.rules.push(stonkRule);
     } catch { /* A new manifest is created below. */ }
     qualityManifest.quarantinedMints[WRAPPED_SOL_MINT] ??= {
       status: "excluded", reason: "False launch: wrapped SOL was stored as the mint; inspected launch signature is a Pump buy, not create/create_v2.",
