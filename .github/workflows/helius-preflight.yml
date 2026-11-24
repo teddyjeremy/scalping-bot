@@ -1,4 +1,4 @@
-name: Helius read-only collection preflight
+name: Helius read-only historical-source preflight
 
 on:
   workflow_dispatch:
