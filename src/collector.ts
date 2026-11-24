@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
-import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
+import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const TOKEN_PROGRAMS = new Set([
@@ -571,6 +571,7 @@ async function reconcileMissedLaunches() {
 async function loadState() {
   await mkdir(DATA_DIR, { recursive: true });
   await restoreCollectorState(statePath);
+  await restoreQualityManifest(qualityPath);
   try {
     state = JSON.parse(await readFile(statePath, "utf8")) as CollectorState;
     state.tokens ??= {};
