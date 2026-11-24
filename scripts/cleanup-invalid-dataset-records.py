@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi, hf_hub_download
@@ -58,17 +59,30 @@ def main() -> None:
 
     if QUALITY_PATH in files:
         quality = json.loads(read_repo_file(api, QUALITY_PATH).decode("utf-8"))
-        record = quality.setdefault("quarantinedMints", {}).setdefault(MINT, {})
-        record.update({
-            "status": "deleted",
-            "reason": "Confirmed false positive: launch transaction invokes Pump BuyExactQuoteInV3, not create/create_v2.",
-            "rawPath": RAW_PATH,
-            "rawDeleted": True,
-            "retainedForAudit": False,
-        })
-        updated_quality = (json.dumps(quality, indent=2) + "\n").encode("utf-8")
-        operations.append(CommitOperationAdd(path_in_repo=QUALITY_PATH, path_or_fileobj=updated_quality))
-        print("Updated quality manifest to mark the invalid record physically deleted.")
+    else:
+        quality = {
+            "schemaVersion": 1,
+            "generatedAt": int(time.time() * 1000),
+            "rules": [
+                "Only top-level Pump create/create_v2 instructions with token-program-owned mint accounts are valid launches.",
+                "StonkFun launches require a top-level LaunchLab initializer, configured platform config and token-program-owned mint.",
+                "Quarantined or deleted mints are excluded from strategy research.",
+                "Wallet-balance-delta trade observations are low confidence and are not execution prices or exact volumes."
+            ],
+            "quarantinedMints": {},
+        }
+    record = quality.setdefault("quarantinedMints", {}).setdefault(MINT, {})
+    record.update({
+        "status": "deleted",
+        "reason": "Confirmed false positive: launch transaction invokes Pump BuyExactQuoteInV3, not create/create_v2.",
+        "rawPath": RAW_PATH,
+        "rawDeleted": True,
+        "retainedForAudit": False,
+    })
+    quality["generatedAt"] = int(time.time() * 1000)
+    updated_quality = (json.dumps(quality, indent=2) + "\n").encode("utf-8")
+    operations.append(CommitOperationAdd(path_in_repo=QUALITY_PATH, path_or_fileobj=updated_quality))
+    print("Updated/created quality manifest to mark the invalid record physically deleted.")
 
     if not operations:
         print("No dataset changes were required.")
@@ -89,10 +103,9 @@ def main() -> None:
     checkpoint = json.loads(read_repo_file(api, STATE_PATH).decode("utf-8"))
     if MINT in checkpoint.get("tokens", {}) or SIGNATURE in checkpoint.get("seenLaunchSignatures", []):
         raise RuntimeError("Post-commit verification failed: checkpoint still references the false positive.")
-    if QUALITY_PATH in remaining:
-        verified_quality = json.loads(read_repo_file(api, QUALITY_PATH).decode("utf-8"))
-        if verified_quality.get("quarantinedMints", {}).get(MINT, {}).get("status") != "deleted":
-            raise RuntimeError("Post-commit verification failed: quality manifest does not mark it deleted.")
+    verified_quality = json.loads(read_repo_file(api, QUALITY_PATH).decode("utf-8"))
+    if verified_quality.get("quarantinedMints", {}).get(MINT, {}).get("status") != "deleted":
+        raise RuntimeError("Post-commit verification failed: quality manifest does not mark it deleted.")
     print("VERIFIED: raw file deleted, checkpoint excludes it, and quality manifest marks it deleted.")
 
 
