@@ -177,10 +177,10 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
       preBalances: tx.meta?.preBalances ?? [], postBalances: tx.meta?.postBalances ?? [],
       preTokenBalances: tx.meta?.preTokenBalances ?? [], postTokenBalances: tx.meta?.postTokenBalances ?? [],
       logMessages: tx.meta?.logMessages ?? [],
-      launchTransactionObservedMintSupplyRaw: observedSupplyRaw > 0n ? observedSupplyRaw.toString() : null,
-      launchTransactionObservedMintDecimals: observedSupplyDecimals
+      launchTransactionTouchedAccountBalanceSumRaw: observedSupplyRaw > 0n ? observedSupplyRaw.toString() : null,
+      launchTransactionTouchedAccountBalanceDecimals: observedSupplyDecimals
     },
-    dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false, launchTransactionSupplyMayBePartial: true }
+    dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false, launchTransactionTouchedBalanceSumIsNotTotalSupply: true }
   };
   await writeFile(file, JSON.stringify(payload) + "\n");
 }
@@ -344,8 +344,6 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const launchData = JSON.parse(await readFile(path.join(ROOT, "launches", record.venue, record.mint + ".json"), "utf8")) as { transaction?: { launchTransactionObservedMintSupplyRaw?: string | null; launchTransactionObservedMintDecimals?: number | null } };
   const observedSupplyRaw = launchData.transaction?.launchTransactionObservedMintSupplyRaw ?? null;
   const observedSupplyDecimals = launchData.transaction?.launchTransactionObservedMintDecimals ?? null;
-  const observedSupply = observedSupplyRaw && observedSupplyDecimals != null
-    ? Number(BigInt(observedSupplyRaw)) / (10 ** observedSupplyDecimals) : null;
   const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
   const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
   const seen = new Set<string>();
@@ -423,7 +421,6 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       quoteMint, observationCount: points.length, firstPrice: first.price, lastPrice: last.price,
       highPrice: high, lowPrice: low, returnPct: first.price > 0 ? ((last.price / first.price) - 1) * 100 : null,
       maxDrawdownPct, priceAtSecondsAfterLaunch: priceAt,
-      launchTransactionObservedSupplyValuation: observedSupply != null ? { first: first.price * observedSupply, last: last.price * observedSupply, high: high * observedSupply, quoteMint, notVerifiedAsFullMarketCap: true } : null,
       priceUnit: "quote asset " + quoteMint + " per whole token",
       caveat: "Trade-implied price from decoded event amounts; not an oracle USD price or guaranteed executable quote."
     };
@@ -445,7 +442,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     return (data.walletProfiles ?? []).filter(p => p.launchFeePayer).map(p => p.wallet);
   }))];
   const summary = {
-    schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,
+    schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,\n    sourcePageCount: names.length, sourcePageFiles: names,
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
@@ -453,12 +450,23 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
       historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
-      launchTransactionObservedSupplyRaw: observedSupplyRaw, launchTransactionObservedSupplyMayBePartial: true,
+      launchTransactionTouchedAccountBalanceSumRaw: touchedBalanceSumRaw, launchTransactionTouchedAccountBalanceDecimals: touchedBalanceDecimals, launchTransactionTouchedBalanceSumIsNotTotalSupply: true,
       historicalHolderSnapshots: false, transactionEventAmounts: "decoded program events",
       walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
     }
   };
   await writeFile(path.join(ROOT, "launches", record.venue, record.mint + ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
+}
+async function summaryNeedsRefresh(record: Cursor["launches"][string]): Promise<boolean> {
+  const summaryPath = path.join(ROOT, "launches", record.venue, record.mint + ".summary.json");
+  try {
+    const summary = JSON.parse(await readFile(summaryPath, "utf8")) as { sourcePageCount?: number };
+    const directory = path.join(ROOT, "trades", record.venue, record.mint);
+    const pageCount = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).length;
+    return summary.sourcePageCount !== pageCount;
+  } catch {
+    return true;
+  }
 }
 async function finishBatch(results: PromiseSettledResult<unknown>[]) {
   const paused = results.find(result => result.status === "rejected" && result.reason instanceof RpcCoolingDownError);
@@ -483,9 +491,8 @@ async function main() {
   const tradeResults = await Promise.allSettled(Array.from({ length: workerCount }, async () => {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
-      if (state.tradeCursors?.[record.mint]?.complete) continue;
-      await collectMintTrades(record);
-      if (state.tradeCursors?.[record.mint]?.complete) await buildMintResearchSummary(record);
+      if (!state.tradeCursors?.[record.mint]?.complete) await collectMintTrades(record);
+      if (state.tradeCursors?.[record.mint]?.complete && await summaryNeedsRefresh(record)) await buildMintResearchSummary(record);
     }
   }));
   if (await finishBatch(tradeResults)) return;
