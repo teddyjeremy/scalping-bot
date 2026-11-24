@@ -113,7 +113,7 @@ type TokenMetrics = {
   walletProfiles: Record<string, WalletProfile>;
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
-  exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[];
+  exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
   networkFeesLamports?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
@@ -218,7 +218,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.uniqueSellers ??= [];
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
-  metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= [];
+  metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
   metrics.networkFeesLamports ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
@@ -519,7 +519,7 @@ function refreshWalletCohorts(item: TokenState) {
   }
   metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles);
 }
-async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
+async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true) {
   if (item.venue === "pumpfun") {
     const poolDiscovery = findPumpSwapPoolFromInstructions(allTransactionInstructions(tx), item.mint);
     if (poolDiscovery && (!item.quoteMint || item.quoteMint === poolDiscovery.quoteMint)) {
@@ -540,6 +540,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   }
   const solUsd = await getSolUsd();
   const metrics = ensureMetrics(item);
+  if (metrics.processedTradeSignatures!.includes(signature)) return;
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
   const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allTransactionInstructions(tx));
   const observations: import("./metrics.js").TradeObservation[] = [];
@@ -581,7 +582,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const usedExactEvents = observations.length > 0;
   const quoteMint = observations[0]?.quoteMint ?? knownQuoteMint;
   if (!usedExactEvents) {
-    if (!knownQuoteMint) return;
+    if (!allowEstimated || !knownQuoteMint) return;
     observations.push(...deriveTradeObservations(tx, item.mint, solUsd, knownQuoteMint));
   }
   if (observations.length === 0) return;
@@ -673,7 +674,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
   }
   await appendTokenEvent(item.mint, {
-    schemaVersion: 3, kind: "trade_metric", mint: item.mint, signature, slot,
+    schemaVersion: 7, kind: "trade_metric", mint: item.mint, signature, slot,
     blockTime: tx.blockTime, observations,
     quoteMint, quoteSymbol: metrics.quoteSymbol ?? null,
     tradeVolumeQuote: observations.reduce((sum, trade) => sum + trade.quoteAmount, 0),
@@ -697,6 +698,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       ? ((latest.priceUsd / metrics.firstPriceUsd) - 1) * 100 : null,
     pricingMethod: usedExactEvents ? "decoded_program_trade_event" : "owner_balance_delta_estimate", confidence: usedExactEvents ? "high" : "low"
   });
+  metrics.processedTradeSignatures!.push(signature);
+  if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
   await recordDueSnapshots(item, Date.now());
   await persistState();
 }
@@ -1177,6 +1180,7 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       program: PUMP_PROGRAM.toBase58(), instruction: createInstruction.kind, launchVerification: "IDL discriminator + mint account owner", launchLogs: logs
     });
     await persistState();
+    await processTradeMetrics(item, tx, signature, slot, false);
     await captureMint(item);
     console.log("Verified Pump mint capture started:", mint, "fee payer:", feePayer);
   }
@@ -1224,6 +1228,7 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
       launchLogs: logs
     });
     await persistState();
+    await processTradeMetrics(item, tx, signature, slot, false);
     await captureMint(item);
     console.log("Verified StonkFun LaunchLab capture started:", mint, "quote:", quoteMint);
   }
