@@ -828,6 +828,118 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
   }
 }
 
+async function recordRaydiumCpmmPoolSnapshot(item: TokenState, poolAddress: string, connection: Connection, slot: number) {
+  const poolInfo = await connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
+  if (!poolInfo || !poolInfo.owner.equals(RAYDIUM_CPMM_PROGRAM)) return;
+  const pool = decodeRaydiumCpmmPoolState(poolInfo.data);
+  if (!pool || (pool.token0Mint !== item.mint && pool.token1Mint !== item.mint)) return;
+  const baseIsToken0 = pool.token0Mint === item.mint;
+  const baseVault = baseIsToken0 ? pool.token0Vault : pool.token1Vault;
+  const quoteVault = baseIsToken0 ? pool.token1Vault : pool.token0Vault;
+  const quoteMint = baseIsToken0 ? pool.token1Mint : pool.token0Mint;
+  const baseDecimals = baseIsToken0 ? pool.token0Decimals : pool.token1Decimals;
+  const quoteDecimals = baseIsToken0 ? pool.token1Decimals : pool.token0Decimals;
+  if (item.quoteMint && item.quoteMint !== quoteMint) return;
+  const [baseInfo, quoteInfo] = await Promise.all([
+    connection.getAccountInfo(new PublicKey(baseVault), "confirmed"),
+    connection.getAccountInfo(new PublicKey(quoteVault), "confirmed")
+  ]);
+  if (!baseInfo || !quoteInfo) return;
+  const baseRaw = decodeTokenAccountAmount(baseInfo.data, item.mint);
+  const quoteRaw = decodeTokenAccountAmount(quoteInfo.data, quoteMint);
+  if (baseRaw == null || quoteRaw == null || baseRaw <= 0n) return;
+  const baseAmount = Number(baseRaw) / (10 ** baseDecimals);
+  const quoteAmount = Number(quoteRaw) / (10 ** quoteDecimals);
+  const priceQuote = quoteAmount / baseAmount;
+  if (!Number.isFinite(priceQuote) || priceQuote <= 0) return;
+  const isSol = quoteMint === WRAPPED_SOL_MINT;
+  const isStable = quoteMint === USDC_MINT || quoteMint === USDT_MINT;
+  const solUsd = isSol ? await getSolUsd() : null;
+  const quoteUsd = isSol ? solUsd : isStable ? 1 : null;
+  const priceUsd = quoteUsd == null ? null : priceQuote * quoteUsd;
+  const priceSol = isSol ? priceQuote : null;
+  const metrics = ensureMetrics(item);
+  item.quoteMint = quoteMint;
+  metrics.quoteMint = quoteMint;
+  metrics.quoteDecimals = quoteDecimals;
+  metrics.quoteSymbol = isSol ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+  metrics.volumeSolAvailable = isSol;
+  metrics.volumeUsdAvailable = quoteUsd != null;
+  metrics.firstPriceQuote ??= priceQuote;
+  metrics.firstPriceSol ??= priceSol;
+  metrics.firstPriceUsd ??= priceUsd;
+  metrics.lastPriceQuote = priceQuote;
+  metrics.lastPriceSol = priceSol;
+  metrics.lastPriceUsd = priceUsd;
+  metrics.lastPriceObservedAt = Date.now();
+  metrics.priceSource = "raydium_cpmm_vault_reserves";
+  metrics.curveComplete = true;
+  metrics.highPriceQuote = metrics.highPriceQuote == null ? priceQuote : Math.max(metrics.highPriceQuote, priceQuote);
+  metrics.lowPriceQuote = metrics.lowPriceQuote == null ? priceQuote : Math.min(metrics.lowPriceQuote, priceQuote);
+  if (priceUsd != null) {
+    metrics.highPriceUsd = metrics.highPriceUsd == null ? priceUsd : Math.max(metrics.highPriceUsd, priceUsd);
+    metrics.lowPriceUsd = metrics.lowPriceUsd == null ? priceUsd : Math.min(metrics.lowPriceUsd, priceUsd);
+  }
+  const drawdown = metrics.highPriceQuote > 0 ? ((priceQuote / metrics.highPriceQuote) - 1) * 100 : 0;
+  metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
+  const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? priceQuote / metrics.firstPriceQuote : 1;
+  const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+  for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
+    if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
+  }
+  await appendTokenEvent(item.mint, {
+    schemaVersion: 8, kind: "raydium_cpmm_pool_state", mint: item.mint, poolAddress, slot,
+    poolOwner: poolInfo.owner.toBase58(), poolCreator: pool.poolCreator,
+    token0Mint: pool.token0Mint, token1Mint: pool.token1Mint,
+    token0Vault: pool.token0Vault, token1Vault: pool.token1Vault,
+    baseVault, quoteVault, baseMint: item.mint, quoteMint,
+    baseDecimals, quoteDecimals, baseVaultAmountRaw: baseRaw.toString(), quoteVaultAmountRaw: quoteRaw.toString(),
+    baseVaultAmount: baseAmount, quoteVaultAmount: quoteAmount, priceQuote, priceSol, priceUsd, quoteUsd,
+    lpMint: pool.lpMint, lpSupplyRaw: pool.lpSupplyRaw.toString(), openTime: pool.openTime.toString(),
+    status: pool.status, creatorFeeOn: pool.creatorFeeOn, enableCreatorFee: pool.enableCreatorFee,
+    protocolFeesToken0Raw: pool.protocolFeesToken0Raw.toString(), protocolFeesToken1Raw: pool.protocolFeesToken1Raw.toString(),
+    fundFeesToken0Raw: pool.fundFeesToken0Raw.toString(), fundFeesToken1Raw: pool.fundFeesToken1Raw.toString(),
+    creatorFeesToken0Raw: pool.creatorFeesToken0Raw.toString(), creatorFeesToken1Raw: pool.creatorFeesToken1Raw.toString(),
+    marketCapQuote: marketCap(priceQuote, item.supplyUi ?? null),
+    marketCapSol: marketCap(priceSol, item.supplyUi ?? null),
+    marketCapUsd: marketCap(priceUsd, item.supplyUi ?? null), marketCapBasis: "total_supply_fdv",
+    pricingMethod: "raydium_cpmm_vault_reserves", executionQuote: false,
+    note: "CPMM reserve-ratio reference; not a fill quote and does not measure locked LP ownership."
+  });
+  await recordDueSnapshots(item, Date.now());
+  await persistState();
+}
+
+async function subscribeRaydiumCpmmPool(item: TokenState, poolAddress: string) {
+  const sub = activeSubscriptions.get(item.mint);
+  if (!sub || (sub.ammPoolAddress === poolAddress && (sub.ammIds?.length ?? 0) > 0) || pumpSwapSubscriptionPending.has(item.mint)) return;
+  pumpSwapSubscriptionPending.add(item.mint);
+  if (sub.ammIds) for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
+  sub.ammIds = [];
+  const refresh = (slot: number) => {
+    void recordRaydiumCpmmPoolSnapshot(item, poolAddress, sub.connection, slot).catch(error =>
+      console.warn("Raydium CPMM pool snapshot failed:", item.mint, String(error).slice(0, 160))
+    );
+  };
+  try {
+    const poolInfo = await sub.connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
+    if (!poolInfo || !poolInfo.owner.equals(RAYDIUM_CPMM_PROGRAM)) return;
+    const pool = decodeRaydiumCpmmPoolState(poolInfo.data);
+    if (!pool || (pool.token0Mint !== item.mint && pool.token1Mint !== item.mint)) return;
+    const poolId = await sub.connection.onAccountChange(new PublicKey(poolAddress), (_info, context) => refresh(context.slot), "confirmed");
+    const vault0Id = await sub.connection.onAccountChange(new PublicKey(pool.token0Vault), (_info, context) => refresh(context.slot), "confirmed");
+    const vault1Id = await sub.connection.onAccountChange(new PublicKey(pool.token1Vault), (_info, context) => refresh(context.slot), "confirmed");
+    sub.ammIds = [poolId, vault0Id, vault1Id];
+    sub.ammPoolAddress = poolAddress;
+    refresh(0);
+    console.log("StonkFun post-graduation CPMM tracking started:", item.mint, poolAddress);
+  } catch (error) {
+    console.warn("Could not subscribe to Raydium CPMM pool:", item.mint, String(error).slice(0, 160));
+  } finally {
+    pumpSwapSubscriptionPending.delete(item.mint);
+  }
+}
+
 async function retryPendingActivityTransactions() {
   if (retryingPendingActivity || shuttingDown) return;
   retryingPendingActivity = true;
