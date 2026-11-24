@@ -42,6 +42,48 @@ export async function restoreCollectorState(localPath: string) {
   }
 }
 
+export async function quarantineRemoteMintFile(mint: string, reason: string): Promise<boolean> {
+  if (!token) return false;
+  const rawPath = `raw/pumpfun/${mint}/events.jsonl`;
+  const archivePath = `quarantine/pumpfun/${mint}/events.jsonl`;
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = `https://huggingface.co/datasets/${repoName}/resolve/main/`;
+  try {
+    const [rawResponse, archiveResponse] = await Promise.all([
+      fetch(base + rawPath, { headers, signal: AbortSignal.timeout(30_000) }),
+      fetch(base + archivePath, { headers, signal: AbortSignal.timeout(30_000) })
+    ]);
+    let archived: Blob | null = null;
+    if (archiveResponse.ok) {
+      // Existing archive is authoritative; never overwrite it with a raw-path marker on a retry.
+      await archiveResponse.body?.cancel();
+    } else if (archiveResponse.status === 404 && rawResponse.ok) {
+      archived = new Blob([await rawResponse.arrayBuffer()], { type: "application/x-ndjson" });
+    } else if (archiveResponse.status !== 404) {
+      throw new Error(`Quarantine archive check returned HTTP ${archiveResponse.status}`);
+    }
+    if (rawResponse.status !== 404 && !rawResponse.ok) throw new Error(`Raw event download returned HTTP ${rawResponse.status}`);
+    const marker = {
+      schemaVersion: 1, kind: "quarantined_dataset_entry", mint, reason,
+      archivedAt: new Date().toISOString(), archivedPath: archivePath,
+      originalRawPreserved: archived != null || archiveResponse.ok
+    };
+    const files = [];
+    if (archived) files.push({ path: archivePath, content: archived });
+    files.push({ path: rawPath, content: new Blob([JSON.stringify(marker) + "\n"], { type: "application/x-ndjson" }) });
+    await uploadFiles({
+      repo: { type: "dataset", name: repoName }, accessToken: token, files,
+      commitTitle: `Quarantine invalid token directory ${mint.slice(0, 8)}`,
+      commitDescription: "Preserve original raw events under quarantine/ and replace the active raw path with an exclusion marker."
+    });
+    console.log("Quarantined dataset directory:", mint, "original evidence archived:", marker.originalRawPreserved);
+    return true;
+  } catch (error) {
+    console.error("Could not migrate quarantined dataset directory:", mint, String(error).slice(0, 200));
+    return false;
+  }
+}
+
 export async function restoreQualityManifest(localPath: string) {
   if (!token) return;
   try {
