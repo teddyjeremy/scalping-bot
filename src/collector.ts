@@ -421,7 +421,7 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
   const isStonkFun = item.venue === "stonkfun";
-  const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
+  const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote" || metrics.priceSource === "decoded_program_trade_event";
   if (!hasPrimaryPrice && !isStonkFun && item.supplyUi == null) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   metrics.holderSnapshotsRecorded ??= [];
@@ -607,7 +607,16 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   }
   refreshWalletCohorts(item);
   const latest = observations[observations.length - 1];
-  if (item.venue === "stonkfun" || (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote")) {
+  if (usedExactEvents && metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote") {
+    metrics.firstPriceQuote ??= latest.priceQuote;
+    metrics.firstPriceSol ??= latest.priceSol;
+    metrics.firstPriceUsd ??= latest.priceUsd;
+    metrics.lastPriceQuote = latest.priceQuote;
+    metrics.lastPriceSol = latest.priceSol;
+    metrics.lastPriceUsd = latest.priceUsd;
+    metrics.lastPriceObservedAt = Date.now();
+    metrics.priceSource = "decoded_program_trade_event";
+  } else if (!usedExactEvents && (item.venue === "stonkfun" || (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote"))) {
     metrics.firstPriceQuote ??= latest.priceQuote;
     metrics.firstPriceSol ??= latest.priceSol;
     metrics.firstPriceUsd ??= latest.priceUsd;
