@@ -145,13 +145,13 @@ write("failed_transactions.parquet", failed_rows, pa.schema([
     pa.field("computeUnitsConsumed", pa.int64()), pa.field("raw_json", pa.string()),
 ]))
 (OUT / "README.md").write_text(
-    "---\\nlicense: mit\\npretty_name: Solana Launch and Trade Research Archive\\n---\\n"
-    "# Solana launch and trade research archive\\n\\n"
-    "Queryable Parquet exports generated from the raw Pump.fun and StonkFun / Raydium LaunchLab archive. Raw JSON/JSONL records remain under `historical/`.\\n\\n"
-    "- `launches.parquet`: launch metadata and transaction costs.\\n"
-    "- `launch_summaries.parquet`: per-token event counts and capture-completeness flags.\\n"
-    "- `trade_events.parquet`: decoded buys/sells, quote amounts, fees and quote-denominated prices.\\n"
-    "- `failed_transactions.parquet`: failed transaction observations and network fees.\\n\\n"
-    "A summary row is provisional until `captureComplete` is true. Amounts ending in `Raw` are integer base units. Implied prices are quote-asset-denominated, not USD. Missing historical USD prices, FDV and holder snapshots are not fabricated. Bot/sniper/bundle labels are heuristics, not proof.\\n",
+    "---\nlicense: mit\npretty_name: Solana Launch and Trade Research Archive\n---\n"
+    "# Solana launch and trade research archive\n\n"
+    "Queryable Parquet exports generated from the raw Pump.fun and StonkFun / Raydium LaunchLab archive. Raw JSON/JSONL records remain under `historical/`.\n\n"
+    "- `launches.parquet`: launch metadata and transaction costs.\n"
+    "- `launch_summaries.parquet`: per-token event counts and capture-completeness flags.\n"
+    "- `trade_events.parquet`: decoded buys/sells, quote amounts, fees and quote-denominated prices.\n"
+    "- `failed_transactions.parquet`: failed transaction observations and network fees.\n\n"
+    "A summary row is provisional until `captureComplete` is true. Amounts ending in `Raw` are integer base units. Implied prices are quote-asset-denominated, not USD. Missing historical USD prices, FDV and holder snapshots are not fabricated. Bot/sniper/bundle labels are heuristics, not proof.\n",
     encoding="utf-8",
 )
