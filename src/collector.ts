@@ -621,14 +621,15 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
   const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allInstructions);
   const observations: import("./metrics.js").TradeObservation[] = [];
+  let decodedEventConversionIncomplete = decodedEvents.length > 0 && item.supplyDecimals == null;
   if (decodedEvents.length > 0 && item.supplyDecimals != null) {
     for (const event of decodedEvents) {
       const quoteMint = event.venue === "pumpswap" ? (knownQuoteMint ?? event.quoteMint) : event.quoteMint;
       const quoteDecimals = await getMintDecimals(quoteMint);
-      if (quoteDecimals == null) continue;
+      if (quoteDecimals == null) { decodedEventConversionIncomplete = true; continue; }
       const tokenAmount = Number(event.tokenAmountRaw) / (10 ** item.supplyDecimals);
       const quoteAmount = Number(event.quoteAmountRaw) / (10 ** quoteDecimals);
-      if (!Number.isFinite(tokenAmount) || tokenAmount <= 0 || !Number.isFinite(quoteAmount) || quoteAmount <= 0) continue;
+      if (!Number.isFinite(tokenAmount) || tokenAmount <= 0 || !Number.isFinite(quoteAmount) || quoteAmount <= 0) { decodedEventConversionIncomplete = true; continue; }
       const priceQuote = quoteAmount / tokenAmount;
       const isSol = quoteMint === WRAPPED_SOL_MINT;
       const isStable = quoteMint === USDC_MINT || quoteMint === USDT_MINT;
@@ -676,6 +677,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       });
     }
   }
+  if (decodedEventConversionIncomplete) return false;
   const usedExactEvents = observations.length > 0;
   const quoteMint = observations[0]?.quoteMint ?? knownQuoteMint;
   if (!usedExactEvents) {
