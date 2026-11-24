@@ -118,7 +118,7 @@ async function getSolUsd(): Promise<number | null> {
   }
 }
 function ensureMetrics(item: TokenState): TokenMetrics {
-  item.metrics ??= {
+  const metrics = item.metrics ??= {
     tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0, volumeQuote: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
     lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null,
@@ -126,7 +126,19 @@ function ensureMetrics(item: TokenState): TokenMetrics {
     timeToTargetsSeconds: { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null },
     largestBuySol: 0, largestSellSol: 0, largestBuyQuote: 0, largestSellQuote: 0
   };
-  return item.metrics;
+  // Upgrade checkpoint metrics written by earlier schema versions without losing accumulated values.
+  metrics.volumeSol = Number.isFinite(metrics.volumeSol) ? metrics.volumeSol : 0;
+  metrics.volumeUsd = Number.isFinite(metrics.volumeUsd) ? metrics.volumeUsd : 0;
+  metrics.volumeQuote = Number.isFinite(metrics.volumeQuote) ? metrics.volumeQuote : 0;
+  metrics.largestBuySol = Number.isFinite(metrics.largestBuySol) ? metrics.largestBuySol : 0;
+  metrics.largestSellSol = Number.isFinite(metrics.largestSellSol) ? metrics.largestSellSol : 0;
+  metrics.largestBuyQuote = Number.isFinite(metrics.largestBuyQuote) ? metrics.largestBuyQuote : 0;
+  metrics.largestSellQuote = Number.isFinite(metrics.largestSellQuote) ? metrics.largestSellQuote : 0;
+  metrics.uniqueBuyers ??= [];
+  metrics.uniqueSellers ??= [];
+  metrics.snapshotsRecorded ??= [];
+  metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
+  return metrics;
 }
 const SNAPSHOT_SECONDS = [5, 10, 15, 30, 60, 120, 300, 600];
 
