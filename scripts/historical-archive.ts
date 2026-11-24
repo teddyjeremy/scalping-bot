@@ -165,8 +165,8 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   const file = path.join(ROOT, "launches", record.venue, record.mint + ".json");
   await mkdir(path.dirname(file), { recursive: true });
   const launchMintBalances = (tx.meta?.postTokenBalances ?? []).filter(balance => balance.mint === record.mint);
-  const observedSupplyRaw = launchMintBalances.reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n);
-  const observedSupplyDecimals = launchMintBalances[0]?.uiTokenAmount.decimals ?? null;
+  const touchedBalanceSumRaw = launchMintBalances.reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n);
+  const touchedBalanceDecimals = launchMintBalances[0]?.uiTokenAmount.decimals ?? null;
   const payload = {
     schemaVersion: 1, recordType: "historical_launch", historicalWindow: { start: START, end: END },
     ...record, observedAt: new Date().toISOString(),
@@ -177,8 +177,8 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
       preBalances: tx.meta?.preBalances ?? [], postBalances: tx.meta?.postBalances ?? [],
       preTokenBalances: tx.meta?.preTokenBalances ?? [], postTokenBalances: tx.meta?.postTokenBalances ?? [],
       logMessages: tx.meta?.logMessages ?? [],
-      launchTransactionTouchedAccountBalanceSumRaw: observedSupplyRaw > 0n ? observedSupplyRaw.toString() : null,
-      launchTransactionTouchedAccountBalanceDecimals: observedSupplyDecimals
+      launchTransactionTouchedAccountBalanceSumRaw: touchedBalanceSumRaw > 0n ? touchedBalanceSumRaw.toString() : null,
+      launchTransactionTouchedAccountBalanceDecimals: touchedBalanceDecimals
     },
     dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false, launchTransactionTouchedBalanceSumIsNotTotalSupply: true }
   };
