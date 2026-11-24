@@ -120,7 +120,8 @@ type TokenMetrics = {
   largestBuySol: number;
   largestSellSol: number; largestBuyQuote: number; largestSellQuote: number;
   priceSource?: string;
-  estimatedCurveFeeBps?: number | null;\n  top20HolderSharePct?: number | null; creatorHoldingSharePct?: number | null; feePayerHoldingSharePct?: number | null; holderDistributionSnapshotAt?: number | null;
+  estimatedCurveFeeBps?: number | null;
+  top20HolderSharePct?: number | null; creatorHoldingSharePct?: number | null; feePayerHoldingSharePct?: number | null; holderDistributionSnapshotAt?: number | null;
   curveRealSolReserves?: number | null;
   curveRealTokenReserves?: number | null;
   curveVirtualSolReserves?: number | null;
@@ -248,7 +249,8 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
   metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.buyPriceImpactSamples ??= []; metrics.sellPriceImpactSamples ??= []; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
-  metrics.recentTradeSignals ??= []; metrics.lastRealQuoteReserveUsd ??= null;\n  metrics.top20HolderSharePct ??= null; metrics.creatorHoldingSharePct ??= null; metrics.feePayerHoldingSharePct ??= null; metrics.holderDistributionSnapshotAt ??= null;
+  metrics.recentTradeSignals ??= []; metrics.lastRealQuoteReserveUsd ??= null;
+  metrics.top20HolderSharePct ??= null; metrics.creatorHoldingSharePct ??= null; metrics.feePayerHoldingSharePct ??= null; metrics.holderDistributionSnapshotAt ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
@@ -1718,7 +1720,8 @@ async function calculateCandidateFdv(item: TokenState): Promise<{ fdvUsd: number
     if (!launchInfo || !launchInfo.owner.equals(LAUNCHLAB_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
     const launchPool = decodeLaunchLabPoolState(launchInfo.data);
     if (!launchPool || launchPool.baseMint !== item.mint || launchPool.quoteMint !== item.quoteMint || launchPool.platformConfig !== item.platformConfig) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
-    const quoteMint = launchPool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);\n    if (launchPool.creator) item.creator = launchPool.creator;
+    const quoteMint = launchPool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);
+    if (launchPool.creator) item.creator = launchPool.creator;
     if (launchPool.statusName === "funding") {
       const virtualBase = Number(launchPool.virtualBaseRaw) / (10 ** launchPool.baseDecimals);
       const virtualQuote = Number(launchPool.virtualQuoteRaw) / (10 ** launchPool.quoteDecimals);
@@ -1827,7 +1830,7 @@ async function screenDiscoveryCandidate(item: TokenState) {
       metrics.quoteSymbol = valuation.quoteMint === WRAPPED_SOL_MINT ? "SOL" : valuation.quoteMint === USDC_MINT ? "USDC" : valuation.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
     }
     const metrics = ensureMetrics(item);
-    if (ageSeconds >= 30 && metrics.holderDistributionSnapshotAt == null) {
+    if (ageSeconds >= 30 && (metrics.holderDistributionSnapshotAt == null || Date.now() - metrics.holderDistributionSnapshotAt > 15_000)) {
       try { await recordHolderDistributionSnapshot(item, Math.floor(ageSeconds), null); }
       catch (error) { console.warn("Early holder snapshot will retry:", item.mint, String(error).slice(0, 120)); }
     }
