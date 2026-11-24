@@ -313,7 +313,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
   metrics.lastPriceSol = priceSol; metrics.lastPriceUsd = priceUsd; metrics.lastPriceQuote = priceQuote;
-  metrics.lastPriceObservedAt = Date.now();
+  metrics.lastPriceObservedAt = observedAt;
   metrics.curveRealSolReserves = isSol ? realQuote : null;
   metrics.curveRealTokenReserves = realToken;
   metrics.curveVirtualSolReserves = isSol ? virtualQuote : null;
@@ -772,10 +772,12 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.lastPriceUsd = latest.priceUsd;
     metrics.lastPriceObservedAt = Date.now();
     metrics.priceSource = "owner_balance_delta_estimate";
+  }
+  if (metrics.priceSource === "decoded_program_trade_event" || metrics.priceSource === "owner_balance_delta_estimate") {
     metrics.highPriceQuote = metrics.highPriceQuote == null ? latest.priceQuote : Math.max(metrics.highPriceQuote, latest.priceQuote);
     metrics.lowPriceQuote = metrics.lowPriceQuote == null ? latest.priceQuote : Math.min(metrics.lowPriceQuote, latest.priceQuote);
     const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? latest.priceQuote / metrics.firstPriceQuote : 1;
-    const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+    const elapsed = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
     for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
       if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
     }
