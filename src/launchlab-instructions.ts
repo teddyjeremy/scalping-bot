@@ -7,7 +7,7 @@ const LAUNCHLAB_INITIALIZERS = new Map<string, "initialize" | "initialize_v2" | 
 ]);
 
 export type StonkFunLaunchInstruction = {
-  mint: string;
+  payer: string; creator: string; mint: string;
   quoteMint: string;
   pool: string;
   platformConfig: string;
@@ -31,11 +31,13 @@ export function findStonkFunLaunchInstructions(
     if (!kind) continue;
     const platformConfig = String(instruction.accounts[3] ?? "");
     if (!stonkFunPlatformConfigs.has(platformConfig)) continue;
+    const payer = String(instruction.accounts[0] ?? "");
+    const creator = String(instruction.accounts[1] ?? "");
     const pool = String(instruction.accounts[5] ?? "");
     const mint = String(instruction.accounts[6] ?? "");
     const quoteMint = String(instruction.accounts[7] ?? "");
-    if (!pool || !mint || !quoteMint) continue;
-    found.push({ mint, quoteMint, pool, platformConfig, kind });
+    if (!payer || !creator || !pool || !mint || !quoteMint) continue;
+    found.push({ payer, creator, mint, quoteMint, pool, platformConfig, kind });
   }
   return found;
 }
