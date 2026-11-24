@@ -477,7 +477,6 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         protocolFeesQuote: metrics.protocolFeesQuote, creatorFeesQuote: metrics.creatorFeesQuote,
         lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
         buybackFeesQuote: metrics.buybackFeesQuote,
-        exactTradeCount: metrics.exactTradeCount ?? 0, estimatedTradeCount: metrics.estimatedTradeCount ?? 0,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
         curveRealSolReserves: metrics.curveRealSolReserves ?? null,
