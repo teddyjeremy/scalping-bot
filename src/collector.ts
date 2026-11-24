@@ -329,7 +329,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     virtualQuoteReserves: virtualQuote, realQuoteReserves: realQuote,
     totalSupply: supply, tokenDecimals: decimals, priceQuote, priceSol, priceUsd, quoteUsd, solUsd,
     marketCapQuote: marketCap(priceQuote, supply), marketCapSol: isSol ? marketCap(priceQuote, supply) : null,
-    marketCapUsd: marketCap(priceUsd, supply), pricingMethod: "pump_bonding_curve_virtual_reserves",
+    marketCapUsd: marketCap(priceUsd, supply), marketCapBasis: "total_supply_fdv", pricingMethod: "pump_bonding_curve_virtual_reserves",
     // Published bonding-curve schedule: 0.95% protocol + 0.30% creator = 1.25%.
     // Custom-pair Holder Rewards can override the creator component; exact event values take precedence.
     estimatedProtocolFeeBps: 95,
@@ -366,7 +366,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
       priceQuote: metrics.lastPriceQuote ?? null, quoteMint: metrics.quoteMint ?? null,
       quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
-      marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), totalSupply: supply,
+      marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
       priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd, volumeQuote: metrics.volumeQuote,
@@ -459,7 +459,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
     marketCapQuote: marketCap(latest.priceQuote, item.supplyUi ?? null),
     marketCapSol: latest.priceSol == null ? null : marketCap(latest.priceSol, item.supplyUi ?? null),
-    marketCapUsd: marketCap(latest.priceUsd, item.supplyUi ?? null),
+    marketCapUsd: marketCap(latest.priceUsd, item.supplyUi ?? null), marketCapBasis: "total_supply_fdv",
     priceChangePctFromFirstTrade: metrics.firstPriceUsd && latest.priceUsd != null
       ? ((latest.priceUsd / metrics.firstPriceUsd) - 1) * 100 : null,
     pricingMethod: "owner_balance_delta_estimate", confidence: "low"
@@ -533,7 +533,7 @@ async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string,
     priceQuote, priceSol, priceUsd, quoteUsd,
     marketCapQuote: marketCap(priceQuote, item.supplyUi ?? null),
     marketCapSol: marketCap(priceSol, item.supplyUi ?? null),
-    marketCapUsd: marketCap(priceUsd, item.supplyUi ?? null),
+    marketCapUsd: marketCap(priceUsd, item.supplyUi ?? null), marketCapBasis: "total_supply_fdv",
     pricingMethod: "pumpswap_pool_vault_reserves_plus_virtual_quote",
     executionQuote: false, note: "Reserve-ratio spot reference; actual fill differs due to AMM fees, slippage and route costs."
   });
