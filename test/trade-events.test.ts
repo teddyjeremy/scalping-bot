@@ -78,7 +78,7 @@ test("decodes StonkFun LaunchLab trade events using matching swap instruction ac
   chunks.length = 0;
   chunks.push(Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]));
   pubkey(1);
-  for (let i = 1; i <= 7; i++) u64(i);
+  u64(1); u64(1_000_000_000n); u64(10_000_000_000n); u64(5); u64(6); u64(7); u64(8);
   u64(1_000_000_000n); u64(100_000_000n);
   u64(10_000n); u64(20_000n); u64(30_000n); u64(40_000n);
   u8(0); u8(0); u8(1);
@@ -111,6 +111,6 @@ test("decodes StonkFun LaunchLab trade events using matching swap instruction ac
   assert.equal(result[0].platformFeeRaw, 20_000n);
   assert.equal(result[0].creatorFeeRaw, 30_000n);
   assert.equal(result[0].shareFeeRaw, 40_000n);
-  assert.equal(result[0].preTradeBaseReserveRaw, 4n);
-  assert.equal(result[0].preTradeQuoteReserveRaw, 5n);
+  assert.equal(result[0].preTradeBaseReserveRaw, 1_100_000_000n);
+  assert.equal(result[0].preTradeQuoteReserveRaw, 9_000_000_000n);
 });
