@@ -33,7 +33,7 @@ type TokenMetrics = {
   volumeSol: number; volumeUsd: number;
   uniqueBuyers: string[]; uniqueSellers: string[];
   firstPriceSol: number | null; firstPriceUsd: number | null;
-  lastPriceSol: number | null; lastPriceUsd: number | null;
+  lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
   highPriceUsd: number | null; lowPriceUsd: number | null;
   snapshotsRecorded: number[];
 };
@@ -79,7 +79,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   item.metrics ??= {
     tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
-    lastPriceSol: null, lastPriceUsd: null, highPriceUsd: null, lowPriceUsd: null,
+    lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null,
     snapshotsRecorded: []
   };
   return item.metrics;
@@ -105,7 +105,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
       uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
-      priceIsStale: priceSol == null || observedAt - (item.metrics?.lastPriceUsd ? observedAt : item.firstSeenAt) > 5_000,
+      priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
       pricingMethod: "owner_balance_delta_estimate"
     });
     metrics.snapshotsRecorded.push(seconds);
@@ -132,6 +132,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.firstPriceUsd ??= trade.priceUsd;
     metrics.lastPriceSol = trade.priceSol;
     metrics.lastPriceUsd = trade.priceUsd;
+    metrics.lastPriceObservedAt = Date.now();
     if (trade.priceUsd != null) {
       metrics.highPriceUsd = metrics.highPriceUsd == null ? trade.priceUsd : Math.max(metrics.highPriceUsd, trade.priceUsd);
       metrics.lowPriceUsd = metrics.lowPriceUsd == null ? trade.priceUsd : Math.min(metrics.lowPriceUsd, trade.priceUsd);
