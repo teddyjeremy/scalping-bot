@@ -1,0 +1,98 @@
+name: Historical Solana research archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "UTC start date (YYYY-MM-DD)"
+        required: true
+        default: "2026-11-01"
+        type: string
+      end_date:
+        description: "UTC end date, exclusive (YYYY-MM-DD)"
+        required: true
+        default: "2026-11-24"
+        type: string
+      max_pages:
+        description: "Maximum 100-signature pages per program/mint in this run"
+        required: true
+        default: "20"
+        type: string
+
+concurrency:
+  group: historical-solana-archive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HISTORY_START: "${{ inputs.start_date }}T00:00:00Z"
+      HISTORY_END: "${{ inputs.end_date }}T00:00:00Z"
+      HISTORY_MAX_PAGES_PER_RUN: ${{ inputs.max_pages }}
+      DATA_DIR: ./historical-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Restore resumable historical archive workspace
+        uses: actions/cache@v4
+        with:
+          path: historical-data
+          key: historical-archive-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            historical-archive-
+      - name: Validate secrets and date range
+        shell: bash
+        run: |
+          test -n "$HELIUS_API_KEY_1" || { echo "::error::Missing HELIUS_API_KEY_1"; exit 1; }
+          test -n "$HELIUS_API_KEY_2" || { echo "::error::Missing HELIUS_API_KEY_2"; exit 1; }
+          test -n "$HELIUS_API_KEY_3" || { echo "::error::Missing HELIUS_API_KEY_3"; exit 1; }
+          test -n "$HF_TOKEN" || { echo "::error::Missing HF_TOKEN"; exit 1; }
+          python - <<'PY'
+          import os
+          from datetime import date
+          start = date.fromisoformat(os.environ["HISTORY_START"][:10])
+          end = date.fromisoformat(os.environ["HISTORY_END"][:10])
+          if start >= end:
+              raise SystemExit("HISTORY_START must be earlier than HISTORY_END")
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck application and historical scanner
+        run: |
+          npm run typecheck
+          npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/historical-archive.ts
+      - name: Run unit tests
+        run: npm test
+      - name: Scan historical launches and first ten minutes of trades
+        run: npm run historical:archive
+      - name: Install Hugging Face CLI
+        if: always()
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Upload resumable archive to Hugging Face dataset
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -d historical-data ]; then
+            hf upload ndeda/solana-scalping-data historical-data historical --repo-type dataset --token "$HF_TOKEN"
+          fi
+      - name: Preserve run output as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-archive-${{ github.run_id }}
+          path: historical-data/
+          if-no-files-found: warn
+          retention-days: 30
