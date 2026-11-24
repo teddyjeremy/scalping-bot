@@ -577,8 +577,8 @@ async function recordTransactionFeeMetrics(item: TokenState, tx: ParsedTransacti
     feeModelNote: "Base signature fee is estimated at 5000 lamports per required signer; remainder is an estimated priority fee and may include other fee components."
   });
 }
-async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true, historicalReplay = false, replayObservedAt?: number) {
-  if (tx.meta?.err) { await recordTransactionFeeMetrics(item, tx, signature, slot); await persistState(); return; }
+async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true, historicalReplay = false, replayObservedAt?: number): Promise<boolean> {
+  if (tx.meta?.err) { await recordTransactionFeeMetrics(item, tx, signature, slot); await persistState(); return true; }
   const allInstructions = allTransactionInstructions(tx);
   let migrationDetected = false;
   if (item.venue === "stonkfun") {
@@ -616,7 +616,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   }
   const metrics = ensureMetrics(item);
   await recordTransactionFeeMetrics(item, tx, signature, slot);
-  if (metrics.processedTradeSignatures!.includes(signature)) return;
+  if (metrics.processedTradeSignatures!.includes(signature)) return true;
   const solUsd = await getSolUsd();
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
   const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allInstructions);
@@ -679,10 +679,20 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const usedExactEvents = observations.length > 0;
   const quoteMint = observations[0]?.quoteMint ?? knownQuoteMint;
   if (!usedExactEvents) {
-    if (!allowEstimated || !knownQuoteMint || migrationDetected) return;
+    if (migrationDetected || !allowEstimated) return true;
+    if (!knownQuoteMint) return false;
     observations.push(...deriveTradeObservations(tx, item.mint, solUsd, knownQuoteMint));
   }
-  if (observations.length === 0) return;
+  if (observations.length === 0) {
+    // A decoded venue event that could not be converted is not safe to checkpoint:
+    // retry after mint/quote metadata or decimals become available. A transaction
+    // with no supported swap event is fully inspected and can be checkpointed.
+    if (decodedEvents.length > 0) return false;
+    metrics.processedTradeSignatures!.push(signature);
+    if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
+    await persistState();
+    return true;
+  }
 
   const observedAt = replayObservedAt ?? (tx.blockTime ? tx.blockTime * 1000 : Date.now());
   for (const trade of observations) {
@@ -826,6 +836,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
   await recordDueSnapshots(item, historicalReplay ? observedAt : Date.now(), historicalReplay);
   await persistState();
+  return true;
 }
 
 async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string, connection: Connection, slot: number) {
@@ -1386,7 +1397,16 @@ async function backfillExistingTokenMetrics() {
           continue;
         }
         const isLaunchTransaction = record.signature === item.launchSignature;
-        await processTradeMetrics(item, tx, record.signature, tx.slot ?? record.slot, !isLaunchTransaction, true, record.observedAt);
+        const replayCompleted = await processTradeMetrics(item, tx, record.signature, tx.slot ?? record.slot, !isLaunchTransaction, true, record.observedAt);
+        if (!replayCompleted) {
+          pending.push(record);
+          state.pendingActivity ??= {};
+          const queue = state.pendingActivity[item.mint] ??= [];
+          if (!queue.some(entry => entry.signature === record.signature) && queue.length < 500) {
+            queue.push({ signature: record.signature, slot: record.slot, observedAt: record.observedAt, logs: [] });
+          }
+          continue;
+        }
         const current = ensureMetrics(item);
         if (!current.processedTradeSignatures!.includes(record.signature)) {
           current.processedTradeSignatures!.push(record.signature);
