@@ -1871,8 +1871,9 @@ async function shutdown(reason: string) {
 async function main() {
   await loadState();
   await auditExistingLaunches();
-  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !NON_TOKEN_MINTS.has(item.mint));
-  const restoreTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() || (state.pendingActivity?.[item.mint]?.length ?? 0) > 0);
+  const verifiedTokens = Object.values(state.tokens).filter(item => item.launchVerified === true && !NON_TOKEN_MINTS.has(item.mint));
+  const activeTokens = verifiedTokens.filter(item => item.expiresAt > Date.now());
+  const restoreTokens = verifiedTokens;
   await restoreTokenEvents(restoreTokens.map(item => ({ mint: item.mint, venue: item.venue })));
   await retryPendingActivityTransactions();
   for (const item of activeTokens) {
@@ -1893,6 +1894,7 @@ async function main() {
   }, "confirmed");
   stonkDiscoverySubscription = { connection: launchLabDiscovery, id: stonkId };
   console.log("Listening for verified Pump.fun and StonkFun launches; collecting quote-asset prices, pool state, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
+  void backfillExistingTokenMetrics();
   void reconcileMissedLaunches();
   void reconcileMissedStonkLaunches();
   pendingRetryTimer = setInterval(() => { void retryPendingActivityTransactions(); }, 30_000);
