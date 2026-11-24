@@ -152,6 +152,7 @@ export type RaydiumCpmmPoolState = {
   fundFeesToken0Raw: bigint;
   fundFeesToken1Raw: bigint;
   openTime: bigint;
+  status: number;
   creatorFeeOn: number;
   enableCreatorFee: boolean;
   creatorFeesToken0Raw: bigint;
@@ -176,6 +177,7 @@ export function decodeRaydiumCpmmPoolState(data: Buffer): RaydiumCpmmPoolState |
     fundFeesToken0Raw: data.readBigUInt64LE(357),
     fundFeesToken1Raw: data.readBigUInt64LE(365),
     openTime: data.readBigUInt64LE(373),
+    status: data[329],
     creatorFeeOn: data[389],
     enableCreatorFee: data[390] === 1,
     creatorFeesToken0Raw: data.readBigUInt64LE(397),
