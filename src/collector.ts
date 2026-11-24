@@ -139,6 +139,7 @@ let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string
 };
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
 const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; ammIds?: number[]; ammPoolAddress?: string; timer?: NodeJS.Timeout }>();
+const pumpSwapSubscriptionPending = new Set<string>();
 const activitySignatures = new Map<string, Set<string>>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
 let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
@@ -542,7 +543,8 @@ async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string,
 
 async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
   const sub = activeSubscriptions.get(item.mint);
-  if (!sub || (sub.ammPoolAddress === poolAddress && (sub.ammIds?.length ?? 0) > 0)) return;
+  if (!sub || (sub.ammPoolAddress === poolAddress && (sub.ammIds?.length ?? 0) > 0) || pumpSwapSubscriptionPending.has(item.mint)) return;
+  pumpSwapSubscriptionPending.add(item.mint);
   if (sub.ammIds) {
     for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
   }
@@ -566,6 +568,8 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
     console.log("PumpSwap post-graduation pool tracking started:", item.mint, poolAddress);
   } catch (error) {
     console.warn("Could not subscribe to PumpSwap pool:", item.mint, String(error).slice(0, 160));
+  } finally {
+    pumpSwapSubscriptionPending.delete(item.mint);
   }
 }
 
