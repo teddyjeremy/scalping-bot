@@ -416,12 +416,12 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
   const isStonkFun = item.venue === "stonkfun";
   const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
-  if (!hasPrimaryPrice && !isStonkFun) return;
+  if (!hasPrimaryPrice && !isStonkFun && item.supplyUi == null) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   metrics.holderSnapshotsRecorded ??= [];
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds) continue;
-    if (!metrics.snapshotsRecorded.includes(seconds)) {
+    if (!metrics.snapshotsRecorded.includes(seconds) && (hasPrimaryPrice || isStonkFun)) {
       const priceSol = hasPrimaryPrice ? metrics.lastPriceSol : null;
       const priceUsd = hasPrimaryPrice ? metrics.lastPriceUsd : null;
       const supply = item.supplyUi ?? null;
