@@ -129,6 +129,17 @@ New research utilities:
 
 The reconstruction deliberately preserves limitations: price observations can come from different pricing methods and must be filtered by `pricingMethod`; trade windows only cover recorded trade observations; holder concentration only covers the top-20 sample; fees only cover mint-associated transactions that were fetched. Constant-product estimates omit route-specific fees, priority fees, rent, tips, state changes and route selection. Missing observations remain null rather than being fabricated.
 
+### Cross-token wallet graph
+
+The offline wallet graph tool aggregates existing `wallet_activity` events across multiple token event files. It reports wallets active in multiple mints, creator/launch-fee-payer/sniper/bot candidate overlap, quote spend and receipts separated by quote mint, directly observed funding-source groups, and wallet pairs that repeatedly enter the same launch slots.
+
+Run:
+```bash
+npm run research:wallet-graph -- data/tokens/<MINT_A>/events.jsonl data/tokens/<MINT_B>/events.jsonl --output wallet-graph.json
+```
+
+The graph is only as complete as the supplied event files. It does not infer common ownership from timing alone, and funding-source links only include transfers captured in the associated transaction. Quote totals are never combined across different quote assets.
+
 ## Historical window
 
 The requested November 1–23, 2026 period needs an archive backfill. Helius archival RPC can retrieve historical transactions, but scanning the Pump program's entire activity is much heavier than following a known mint. First discover launch signatures/mints for the requested time range, then backfill each selected mint's first 10 minutes. Do not assume a live WebSocket can replay events from earlier dates.
