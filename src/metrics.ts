@@ -40,6 +40,7 @@ export type TradeObservation = {
   protocolFeeBps?: number | null;
   lpFeeBps?: number | null;
   creatorFeeBps?: number | null;
+  tradeFeeQuote?: number | null;
   tradeFeeBase?: number | null;
   creatorFeeBase?: number | null;
   tradeFeeMint?: string | null;
