@@ -77,6 +77,7 @@ console.log(JSON.stringify({
   heliusConnections: rpcResults.map(({ keyIndex, health, slot }) => ({ keyIndex, health, slot })),
   programAccounts: programResults,
   enhancedHistoricalRpc: enhancedHistory,
+  pumpCreateOnlyMintAuthorityIndex: pumpCreateIndex,
   huggingFace: { dataset: datasetInfo.id ?? dataset, readable: true, writePermissionTested: false },
   note: "All three RPC keys were tested concurrently. Enhanced historical RPC is optional; the archive falls back to standard RPC if unavailable. This validates connectivity, not independent quota allocation or write permissions."
 }, null, 2));
