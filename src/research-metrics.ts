@@ -164,6 +164,60 @@ export function calculateHolderConcentration(holders: HolderPoint[]) {
 }
 
 /**
+ * Pump pre-graduation bonding-curve what-if estimate.
+ * Buy fees are deducted from quote input; sell fees are deducted from gross quote output.
+ * This is a reserve/fee-schedule approximation, not an executable transaction quote.
+ */
+export function estimatePumpBondingCurveSwap(input: {
+  virtualBaseReserve: number;
+  virtualQuoteReserve: number;
+  amountIn: number;
+  side: "buy" | "sell";
+  protocolFeeBps: number;
+  creatorFeeBps: number;
+}) {
+  const { virtualBaseReserve, virtualQuoteReserve, amountIn, side, protocolFeeBps, creatorFeeBps } = input;
+  const totalFeeBps = protocolFeeBps + creatorFeeBps;
+  if (![virtualBaseReserve, virtualQuoteReserve, amountIn, protocolFeeBps, creatorFeeBps].every(Number.isFinite) ||
+      virtualBaseReserve <= 0 || virtualQuoteReserve <= 0 || amountIn <= 0 ||
+      protocolFeeBps < 0 || creatorFeeBps < 0 || totalFeeBps >= 10_000) return null;
+  const midPrice = virtualQuoteReserve / virtualBaseReserve;
+  let quoteGross: number;
+  let quoteFee: number;
+  let baseOut: number;
+  let quoteNet: number;
+  if (side === "buy") {
+    quoteGross = amountIn;
+    quoteFee = quoteGross * totalFeeBps / 10_000;
+    const quoteToCurve = quoteGross - quoteFee;
+    baseOut = virtualBaseReserve * quoteToCurve / (virtualQuoteReserve + quoteToCurve);
+    quoteNet = quoteGross;
+  } else {
+    baseOut = amountIn;
+    quoteGross = virtualQuoteReserve * baseOut / (virtualBaseReserve + baseOut);
+    quoteFee = quoteGross * totalFeeBps / 10_000;
+    quoteNet = quoteGross - quoteFee;
+  }
+  const protocolFeeQuote = quoteGross * protocolFeeBps / 10_000;
+  const creatorFeeQuote = quoteGross * creatorFeeBps / 10_000;
+  const amountOut = side === "buy" ? baseOut : quoteNet;
+  const effectivePrice = side === "buy" ? quoteNet / baseOut : amountOut / baseOut;
+  const priceImpactPct = side === "buy"
+    ? (effectivePrice / midPrice - 1) * 100
+    : (1 - effectivePrice / midPrice) * 100;
+  return {
+    side, amountIn, amountOut, quoteGross, quoteFee, quoteNet,
+    protocolFeeQuote, creatorFeeQuote, totalFeeBps,
+    midPriceQuotePerBase: midPrice,
+    effectivePriceQuotePerBase: effectivePrice,
+    priceImpactPct,
+    method: "pump_virtual_reserve_and_fee_schedule_estimate_not_executable_quote",
+    excludesPriorityFeesTipsRentHolderRewardsAndRouteCosts: true,
+    feeRatesAreAssumptionsUnlessVerifiedFromTheSpecificCurveState: true
+  };
+}
+
+/**
  * Constant-product reserve estimate for research only. It is not a router quote,
  * transaction simulation, or guaranteed executable fill.
  */
