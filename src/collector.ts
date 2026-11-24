@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -27,7 +28,21 @@ const rpc = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-
 let rpcCursor = 0;
 const nextRpc = () => rpc[(rpcCursor++) % rpc.length];
 
-type TokenState = { mint: string; creator: string | null; launchSignature: string; firstSeenAt: number; expiresAt: number };
+type TokenMetrics = {
+  tradeCount: number; buyCount: number; sellCount: number;
+  volumeSol: number; volumeUsd: number;
+  uniqueBuyers: string[]; uniqueSellers: string[];
+  firstPriceSol: number | null; firstPriceUsd: number | null;
+  lastPriceSol: number | null; lastPriceUsd: number | null;
+  highPriceUsd: number | null; lowPriceUsd: number | null;
+  snapshotsRecorded: number[];
+};
+type TokenState = {
+  mint: string; creator: string | null; launchSignature: string;
+  firstSeenAt: number; expiresAt: number;
+  supplyUi?: number | null; supplyDecimals?: number | null;
+  metrics?: TokenMetrics;
+};
 type CollectorState = {
   tokens: Record<string, TokenState>;
   seenLaunchSignatures: string[];
@@ -37,12 +52,108 @@ type CollectorState = {
 };
 const statePath = path.join(DATA_DIR, "collector-state.json");
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
-const activeSubscriptions = new Map<string, { connection: Connection; id: number }>();
+const activeSubscriptions = new Map<string, { connection: Connection; id: number; timer?: NodeJS.Timeout }>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
 let runTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 let reconciliation: Promise<void> | undefined;
+
+let cachedSolUsd: { value: number; fetchedAt: number } | undefined;
+async function getSolUsd(): Promise<number | null> {
+  if (cachedSolUsd && Date.now() - cachedSolUsd.fetchedAt < 60_000) return cachedSolUsd.value;
+  try {
+    const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd", { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`SOL/USD price HTTP ${response.status}`);
+    const body = await response.json() as { solana?: { usd?: number } };
+    const value = body.solana?.usd;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return cachedSolUsd?.value ?? null;
+    cachedSolUsd = { value, fetchedAt: Date.now() };
+    return value;
+  } catch (error) {
+    console.warn("SOL/USD reference unavailable; USD metrics will remain null:", String(error).slice(0, 120));
+    return cachedSolUsd?.value ?? null;
+  }
+}
+function ensureMetrics(item: TokenState): TokenMetrics {
+  item.metrics ??= {
+    tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0,
+    uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
+    lastPriceSol: null, lastPriceUsd: null, highPriceUsd: null, lowPriceUsd: null,
+    snapshotsRecorded: []
+  };
+  return item.metrics;
+}
+const SNAPSHOT_SECONDS = [5, 10, 15, 30, 60, 120, 300, 600];
+async function recordDueSnapshots(item: TokenState, observedAt: number) {
+  const metrics = ensureMetrics(item);
+  const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
+  for (const seconds of SNAPSHOT_SECONDS) {
+    if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
+    const priceSol = metrics.lastPriceSol;
+    const priceUsd = metrics.lastPriceUsd;
+    const supply = item.supplyUi ?? null;
+    const marketCapSol = marketCap(priceSol, supply);
+    const marketCapUsd = marketCap(priceUsd, supply);
+    const priceChangePct = metrics.firstPriceUsd && priceUsd != null
+      ? ((priceUsd / metrics.firstPriceUsd) - 1) * 100 : null;
+    await appendTokenEvent(item.mint, {
+      schemaVersion: 3, kind: "market_snapshot", mint: item.mint,
+      elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
+      marketCapSol, marketCapUsd, totalSupply: supply,
+      priceChangePctFromFirstTrade: priceChangePct,
+      tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
+      volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
+      uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
+      priceIsStale: priceSol == null || observedAt - (item.metrics?.lastPriceUsd ? observedAt : item.firstSeenAt) > 5_000,
+      pricingMethod: "owner_balance_delta_estimate"
+    });
+    metrics.snapshotsRecorded.push(seconds);
+    await persistState();
+  }
+}
+async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
+  const solUsd = await getSolUsd();
+  const observations = deriveTradeObservations(tx, item.mint, solUsd);
+  if (observations.length === 0) return;
+  const metrics = ensureMetrics(item);
+  for (const trade of observations) {
+    metrics.tradeCount++;
+    if (trade.side === "buy") {
+      metrics.buyCount++;
+      if (!metrics.uniqueBuyers.includes(trade.wallet)) metrics.uniqueBuyers.push(trade.wallet);
+    } else {
+      metrics.sellCount++;
+      if (!metrics.uniqueSellers.includes(trade.wallet)) metrics.uniqueSellers.push(trade.wallet);
+    }
+    metrics.volumeSol += trade.solAmount;
+    if (trade.priceUsd != null) metrics.volumeUsd += trade.solAmount * (solUsd ?? 0);
+    metrics.firstPriceSol ??= trade.priceSol;
+    metrics.firstPriceUsd ??= trade.priceUsd;
+    metrics.lastPriceSol = trade.priceSol;
+    metrics.lastPriceUsd = trade.priceUsd;
+    if (trade.priceUsd != null) {
+      metrics.highPriceUsd = metrics.highPriceUsd == null ? trade.priceUsd : Math.max(metrics.highPriceUsd, trade.priceUsd);
+      metrics.lowPriceUsd = metrics.lowPriceUsd == null ? trade.priceUsd : Math.min(metrics.lowPriceUsd, trade.priceUsd);
+    }
+  }
+  const latest = observations[observations.length - 1];
+  await appendTokenEvent(item.mint, {
+    schemaVersion: 3, kind: "trade_metric", mint: item.mint, signature, slot,
+    blockTime: tx.blockTime, observations,
+    tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
+    volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
+    uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
+    lastPriceSol: latest.priceSol, lastPriceUsd: latest.priceUsd,
+    marketCapSol: marketCap(latest.priceSol, item.supplyUi ?? null),
+    marketCapUsd: marketCap(latest.priceUsd, item.supplyUi ?? null),
+    priceChangePctFromFirstTrade: metrics.firstPriceUsd && latest.priceUsd != null
+      ? ((latest.priceUsd / metrics.firstPriceUsd) - 1) * 100 : null,
+    pricingMethod: "owner_balance_delta_estimate", confidence: "low"
+  });
+  await recordDueSnapshots(item, Date.now());
+  await persistState();
+}
 
 async function persistState() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -106,6 +217,9 @@ async function captureMint(item: TokenState) {
       const observedAt = Date.now();
       if (observedAt > expiresAt) { await stopCapture(mint); return; }
       const tx = await fetchTransaction(logs.signature);
+      const item = state.tokens[mint];
+      if (tx && item) await processTradeMetrics(item, tx, logs.signature, context.slot);
+      if (tx && item) await recordDueSnapshots(item, observedAt);
       await appendTokenEvent(mint, {
         schemaVersion: 2, kind: "token_activity", mint, observedAt, slot: context.slot,
         signature: logs.signature, err: logs.err, logs: logs.logs,
@@ -118,13 +232,18 @@ async function captureMint(item: TokenState) {
         } : null
       });
     }, "confirmed");
-    activeSubscriptions.set(mint, { connection, id });
+    const timer = setInterval(() => {
+      const item = state.tokens[mint];
+      if (item) void recordDueSnapshots(item, Date.now()).catch(error => console.error("Snapshot error:", String(error)));
+    }, 1_000);
+    activeSubscriptions.set(mint, { connection, id, timer });
     await persistState();
   } catch (error) { console.error("Could not subscribe to mint", mint, String(error)); }
 }
 async function stopCapture(mint: string) {
   const sub = activeSubscriptions.get(mint);
   if (sub) {
+    if (sub.timer) clearInterval(sub.timer);
     try { await sub.connection.removeOnLogsListener(sub.id); } catch {}
     activeSubscriptions.delete(mint);
   }
@@ -136,11 +255,23 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
     if (state.tokens[mint] || !await isMintAccount(mint)) continue;
     const feePayer = getAccountKey(tx.transaction.message.accountKeys[0]);
     const firstSeenAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
-    const item: TokenState = { mint, creator: null, launchSignature: signature, firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS };
+    let supplyUi: number | null = null;
+    let supplyDecimals: number | null = null;
+    try {
+      const supply = await nextRpc().getTokenSupply(new PublicKey(mint), "confirmed");
+      supplyUi = supply.value.uiAmount;
+      supplyDecimals = supply.value.decimals;
+    } catch (error) { console.warn("Could not read token supply for", mint, String(error).slice(0, 120)); }
+    const item: TokenState = {
+      mint, creator: null, launchSignature: signature, firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
+      supplyUi, supplyDecimals
+    };
+    ensureMetrics(item);
     state.tokens[mint] = item;
     await appendTokenEvent(mint, {
       schemaVersion: 2, kind: "launch_detected", mint, feePayer,
       creator: null, creatorEvidence: "not decoded; fee payer is stored separately",
+      totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
       launchSignature: signature, launchSlot: slot, firstSeenAt,
       program: PUMP_PROGRAM.toBase58(), instruction: "create_or_create_v2", launchLogs: logs
     });
@@ -249,7 +380,7 @@ async function main() {
     await handleLiveLaunch(logs.signature, logs, context.slot);
   }, "confirmed");
   discoverySubscription = { connection: discovery, id };
-  console.log("Listening for verified Pump create/create_v2 instructions. API keys configured:", keys.length);
+  console.log("Listening for Pump launches; collecting estimated price, market cap, trade counts, volumes, wallet counts and timed snapshots. API keys configured:", keys.length);
   void reconcileMissedLaunches();
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
