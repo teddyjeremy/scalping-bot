@@ -115,6 +115,20 @@ function asParsedTransaction(row: HeliusHistoryRow): ParsedTransactionWithMeta |
   if (!row.transaction || !row.meta) return null;
   return { transaction: row.transaction, meta: row.meta } as ParsedTransactionWithMeta;
 }
+async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
+  const hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }> = [];
+  const chunkSize = 50;
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    const chunk = rows.slice(offset, offset + chunkSize);
+    const result = await Promise.all(chunk.map(async row => ({
+      entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
+      tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
+    })));
+    hydrated.push(...result);
+    console.log(`${label}: hydrated ${Math.min(offset + chunk.length, rows.length)}/${rows.length} transactions`);
+  }
+  return hydrated;
+}
 type TradeSourceCursor = { before?: string; paginationToken?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
 type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
@@ -202,10 +216,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
     if (enhanced) {
       if (venue === "pumpfun" && pages === 0 && enhanced.data.length === 0) throw new Error("Pump mint-authority history index returned no transactions for the requested historical window.");
-      hydrated = await Promise.all(enhanced.data.map(async row => ({
-        entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
-        tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
-      })));
+      hydrated = await hydrateHistoryRows(enhanced.data, `Launch index ${venue} page ${pages + 1}`);
       progress.paginationToken = enhanced.paginationToken ?? undefined;
       if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
     } else {
@@ -287,10 +298,8 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       let hydrated: Array<{ item: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
       let reachedLaunchBoundary = false;
       if (enhanced) {
-        hydrated = await Promise.all(enhanced.data.map(async row => ({
-          item: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
-          tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
-        })));
+        const pageRows = await hydrateHistoryRows(enhanced.data, `Trade history ${record.venue} ${record.mint}`);
+        hydrated = pageRows.map(row => ({ item: row.entry, tx: row.tx }));
         source.paginationToken = enhanced.paginationToken ?? undefined;
         if (!enhanced.data.length || !enhanced.paginationToken) source.complete = true;
       } else {
