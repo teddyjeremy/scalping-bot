@@ -56,9 +56,59 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   }
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
-type TradeSourceCursor = { before?: string; complete: boolean; pages: number };
+type HeliusHistoryRow = {
+  signature: string;
+  slot: number;
+  blockTime: number | null;
+  err?: unknown;
+  transaction?: unknown;
+  meta?: unknown;
+};
+type HeliusHistoryPage = { data: HeliusHistoryRow[]; paginationToken: string | null };
+let enhancedHistorySupport: boolean | null = null;
+async function getHeliusHistoryPage(address: string, start: number, end: number, paginationToken?: string): Promise<HeliusHistoryPage | null> {
+  if (enhancedHistorySupport === false) return null;
+  try {
+    const page = await rpc("getTransactionsForAddress", async connection => {
+      const keyIndex = connections.indexOf(connection);
+      const response = await fetch(\`https://mainnet.helius-rpc.com/?api-key=\${keys[keyIndex]}\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: "historical-archive", method: "getTransactionsForAddress",
+          params: [address, {
+            transactionDetails: "full", sortOrder: "asc", limit: 1000, commitment: "confirmed",
+            encoding: "jsonParsed", maxSupportedTransactionVersion: 1,
+            ...(paginationToken ? { paginationToken } : {}),
+            filters: { blockTime: { gte: start, lte: end }, status: "any" }
+          }]
+        })
+      });
+      const body = await response.json() as { result?: HeliusHistoryPage; error?: { code?: number; message?: string } };
+      if (!response.ok) throw new Error(\`Helius history HTTP \${response.status}: \${JSON.stringify(body.error ?? {})}\`);
+      if (body.error) throw new Error(\`Helius history RPC \${body.error.code ?? ""}: \${body.error.message ?? "unknown error"}\`);
+      if (!body.result || !Array.isArray(body.result.data)) throw new Error("Helius history RPC returned an unexpected response shape.");
+      return body.result;
+    });
+    enhancedHistorySupport = true;
+    return page;
+  } catch (error) {
+    const message = String(error);
+    if (/method not found|not available|not supported|unauthorized|forbidden|\\b401\\b|\\b403\\b/i.test(message)) {
+      enhancedHistorySupport = false;
+      console.warn("Helius getTransactionsForAddress is unavailable for these keys; using standard RPC history fallback.");
+      return null;
+    }
+    throw error;
+  }
+}
+function asParsedTransaction(row: HeliusHistoryRow): ParsedTransactionWithMeta | null {
+  if (!row.transaction || !row.meta) return null;
+  return { transaction: row.transaction, meta: row.meta } as ParsedTransactionWithMeta;
+}
+type TradeSourceCursor = { before?: string; paginationToken?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 async function save() {
