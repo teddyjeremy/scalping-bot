@@ -9,7 +9,7 @@ import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { decodeProgramTradeEvents } from "./trade-events.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
-import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount, findPumpSwapPoolFromInstructions } from "./pool-state.js";
+import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeRaydiumCpmmPoolState, decodeTokenAccountAmount, findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions, RAYDIUM_CPMM_PROGRAM } from "./pool-state.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -119,7 +119,7 @@ type TokenMetrics = {
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
   launchVerified?: boolean; launchInstruction?: "create" | "create_v2" | "initialize" | "initialize_v2" | "initialize_with_token_2022";
-  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; platformConfig?: string;
+  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; cpmmPoolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
   metrics?: TokenMetrics;
@@ -441,7 +441,7 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
   const isStonkFun = item.venue === "stonkfun";
-  const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote" || metrics.priceSource === "decoded_program_trade_event";
+  const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote" || metrics.priceSource === "raydium_cpmm_vault_reserves" || metrics.priceSource === "decoded_program_trade_event";
   if (!hasPrimaryPrice && !isStonkFun && item.supplyUi == null) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   metrics.holderSnapshotsRecorded ??= [];
@@ -455,7 +455,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       const marketCapUsd = marketCap(priceUsd, supply);
       const priceChangePct = metrics.firstPriceQuote && metrics.lastPriceQuote != null
         ? ((metrics.lastPriceQuote / metrics.firstPriceQuote) - 1) * 100 : null;
-      const isStonkReferenceOnly = isStonkFun && metrics.priceSource !== "decoded_program_trade_event";
+      const isStonkReferenceOnly = isStonkFun && metrics.priceSource !== "decoded_program_trade_event" && metrics.priceSource !== "raydium_cpmm_vault_reserves";
       await appendTokenEvent(item.mint, {
         schemaVersion: 7, kind: "market_snapshot", mint: item.mint,
         elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
@@ -1137,6 +1137,7 @@ async function captureMint(item: TokenState) {
     }, 1_000);
     activeSubscriptions.set(mint, { connection, id, curveId, timer });
     if (item.pumpSwapPoolAddress) void subscribePumpSwapPool(item, item.pumpSwapPoolAddress);
+    if (item.cpmmPoolAddress) void subscribeRaydiumCpmmPool(item, item.cpmmPoolAddress);
     await persistState();
   } catch (error) { console.error("Could not subscribe to mint", mint, String(error)); }
 }
