@@ -544,6 +544,74 @@ function fetchTransaction(signature: string): Promise<ParsedTransactionWithMeta 
   void request.finally(() => transactionFetches.delete(signature));
   return request;
 }
+async function loadActivitySignatures(item: TokenState) {
+  const seen = new Set<string>();
+  try {
+    const content = await readFile(path.join(DATA_DIR, "tokens", item.mint, "events.jsonl"), "utf8");
+    for (const line of content.split("\n")) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as { signature?: unknown };
+        if (typeof event.signature === "string") seen.add(event.signature);
+      } catch { /* Ignore one malformed historical line; preserve the rest. */ }
+    }
+  } catch { /* New token has no local event file yet. */ }
+  activitySignatures.set(item.mint, seen);
+}
+
+async function backfillActiveMintActivity(item: TokenState) {
+  if (item.expiresAt <= Date.now()) return;
+  const seen = activitySignatures.get(item.mint) ?? new Set<string>();
+  activitySignatures.set(item.mint, seen);
+  try {
+    const signatures = await nextRpc().getSignaturesForAddress(new PublicKey(item.mint), { limit: 100 }, "confirmed");
+    const eligible = signatures.filter(entry =>
+      entry.signature !== item.launchSignature &&
+      entry.blockTime != null &&
+      entry.blockTime * 1000 >= item.firstSeenAt &&
+      entry.blockTime * 1000 <= item.expiresAt
+    ).reverse();
+    let pendingChanged = false;
+    for (const entry of eligible) {
+      if (seen.has(entry.signature)) continue;
+      seen.add(entry.signature);
+      const tx = await fetchTransaction(entry.signature);
+      const observedAt = (entry.blockTime ?? Math.floor(Date.now() / 1000)) * 1000;
+      const logs = tx?.meta?.logMessages ?? [];
+      if (tx && (item.quoteMint ?? item.metrics?.quoteMint)) {
+        await processTradeMetrics(item, tx, entry.signature, entry.slot);
+      } else {
+        state.pendingActivity ??= {};
+        const pending = state.pendingActivity[item.mint] ??= [];
+        if (!pending.some(candidate => candidate.signature === entry.signature) && pending.length < 500) {
+          pending.push({ signature: entry.signature, slot: entry.slot, observedAt, logs });
+          pendingChanged = true;
+        }
+      }
+      await appendTokenEvent(item.mint, {
+        schemaVersion: 2, kind: "token_activity_backfill", mint: item.mint, observedAt,
+        slot: entry.slot, signature: entry.signature, backfillWindowStart: item.firstSeenAt,
+        backfillWindowEnd: item.expiresAt, logs,
+        transaction: tx ? {
+          blockTime: tx.blockTime, feeLamports: tx.meta?.fee,
+          signatureCount: tx.transaction.signatures.length,
+          baseSignatureFeeLamports: tx.transaction.signatures.length * 5_000,
+          estimatedPriorityFeeLamports: Math.max(0, (tx.meta?.fee ?? 0) - tx.transaction.signatures.length * 5_000),
+          computeUnitsConsumed: tx.meta?.computeUnitsConsumed, loadedAddresses: tx.meta?.loadedAddresses,
+          err: tx.meta?.err, accountKeys: tx.transaction.message.accountKeys.map(k => getAccountKey(k)),
+          preBalances: tx.meta?.preBalances, postBalances: tx.meta?.postBalances,
+          preTokenBalances: tx.meta?.preTokenBalances, postTokenBalances: tx.meta?.postTokenBalances,
+          innerInstructions: tx.meta?.innerInstructions, logMessages: tx.meta?.logMessages
+        } : null
+      });
+    }
+    if (pendingChanged) await persistState();
+    if (eligible.length > 0) console.log("Backfilled recent mint activity:", item.mint, "signatures:", eligible.length);
+  } catch (error) {
+    console.warn("Recent mint activity backfill paused:", item.mint, String(error).slice(0, 160));
+  }
+}
+
 async function captureMint(item: TokenState) {
   const { mint, expiresAt } = item;
   if (activeSubscriptions.has(mint) || expiresAt <= Date.now()) return;
@@ -551,6 +619,10 @@ async function captureMint(item: TokenState) {
   try {
     const id = connection.onLogs(new PublicKey(mint), async (logs: Logs, context) => {
       if (shuttingDown || logs.err) return;
+      const seen = activitySignatures.get(mint) ?? new Set<string>();
+      activitySignatures.set(mint, seen);
+      if (seen.has(logs.signature)) return;
+      seen.add(logs.signature);
       const observedAt = Date.now();
       if (observedAt > expiresAt) { await stopCapture(mint); return; }
       const tx = await fetchTransaction(logs.signature);
@@ -923,7 +995,11 @@ async function main() {
   const restoreTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() || (state.pendingActivity?.[item.mint]?.length ?? 0) > 0);
   await restoreTokenEvents(restoreTokens.map(item => ({ mint: item.mint, venue: item.venue })));
   await retryPendingActivityTransactions();
-  for (const item of activeTokens) await captureMint(item);
+  for (const item of activeTokens) {
+    await loadActivitySignatures(item);
+    await captureMint(item);
+  }
+  for (const item of activeTokens) await backfillActiveMintActivity(item);
   const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
     if (shuttingDown || logs.err || !CREATE_LOG.test(logs.logs.join("\n"))) return;
