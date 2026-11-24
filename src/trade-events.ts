@@ -121,9 +121,12 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
     r.key(); // coin creator
     const creatorFeeBps = r.u64();
     const creatorFeeRaw = r.u64();
-    if (side === "buy") r.bool(); // track volume
-    if (side === "buy") { r.u64(); r.u64(); r.u64(); r.i64(); r.u64(); }
-    const instructionName = r.string();
+    let instructionName: string | null = null;
+    if (side === "buy") {
+      r.bool(); // track volume
+      r.u64(); r.u64(); r.u64(); r.i64(); r.u64();
+      instructionName = r.string();
+    }
     const cashbackFeeBps = r.u64();
     const cashbackRaw = r.u64();
     const buybackFeeBps = r.u64();
