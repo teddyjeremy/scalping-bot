@@ -101,15 +101,15 @@ The dataset is currently configured as `ndeda/solana-scalping-data`. Upload path
 
 The requested November 1–23, 2026 period needs an archive backfill. Helius archival RPC can retrieve historical transactions, but scanning the Pump program's entire activity is much heavier than following a known mint. First discover launch signatures/mints for the requested time range, then backfill each selected mint's first 10 minutes. Do not assume a live WebSocket can replay events from earlier dates.
 
-## Next milestones
+## Remaining work (not yet complete)
 
-- Add historical launch discovery and resumable cursor checkpoints.
-- Decode Pump create/buy/sell instructions using the official IDL.
-- Add non-Pump launchpads and AMM pool migration detection.
-- Add quote-mint normalization (SOL, USDC, other SPL tokens).
-- Add candidate screening (FDV/market cap, liquidity, trade count, unique buyers, volume).
-- Add wallet clustering labels as evidence-based features, not ground-truth "insider" labels.
-- Export clean per-token features for offline strategy research.
+- Backfill November 1–23, 2026 launches and each token's first ten minutes of transactions. Current cursors only reconcile gaps after their first initialization; they do not provide this historical window.
+- Decode PumpSwap and Raydium CPMM pool reserves, vault balances, migrations and exact swap events after graduation.
+- Decode LaunchLab PoolState and exact StonkFun TradeEvents; the collector currently retains raw pool account bytes and low-confidence signer balance-delta estimates.
+- Add trusted USD conversion for arbitrary quote tokens such as tokenized stocks and other SPL assets.
+- Add executable buy/sell quotes, slippage, price impact, and exact per-trade fee attribution.
+- Add evidence-based wallet clustering, creator/insider activity and holder concentration.
+- Export validated per-token features for offline strategy research.
 
 
 ## GitHub Actions hosted collection
