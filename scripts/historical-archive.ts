@@ -434,6 +434,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const sellers = new Set<string>();
   let buyEvents = 0;
   let sellEvents = 0;
+  let transactionObservations = 0;
+  const observedTransactions = new Set<string>();
   let missingDecimalEvents = 0;
   let duplicateEvents = 0;
   for (const name of names) {
@@ -444,6 +446,11 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as Record<string, unknown>;
       const signature = String(event.signature ?? "");
+      if (event.recordType === "historical_transaction_observation") {
+        transactionObservations++;
+        if (signature) observedTransactions.add(signature);
+        continue;
+      }
       if (event.recordType === "historical_failed_transaction") {
         if (signature && !failedSeen.has(signature)) {
           failedSeen.add(signature);
@@ -540,6 +547,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     sourcePageCount: names.length, sourcePageFiles: names, sourcePageFingerprint,
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
+    transactionObservations: { rows: transactionObservations, distinctSignatures: observedTransactions.size },
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
     capture: {
       windowSeconds: CAPTURE_SECONDS,
