@@ -23,8 +23,17 @@ export type TradeObservation = {
   priceSol: number | null;
   priceUsd: number | null;
   feeLamports: number;
-  pricingMethod: "owner_balance_delta_estimate";
-  confidence: "low";
+  pricingMethod: "owner_balance_delta_estimate" | "decoded_program_trade_event";
+  confidence: "low" | "high";
+  eventName?: string;
+  protocolFeeQuote?: number | null;
+  lpFeeQuote?: number | null;
+  creatorFeeQuote?: number | null;
+  cashbackFeeQuote?: number | null;
+  buybackFeeQuote?: number | null;
+  protocolFeeBps?: number | null;
+  lpFeeBps?: number | null;
+  creatorFeeBps?: number | null;
 };
 
 /**
