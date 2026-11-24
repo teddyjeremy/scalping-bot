@@ -64,6 +64,16 @@ def upload():
         repo_type="dataset",
         commit_message="Update resumable Solana historical research archive",
     )
+    exports = Path("dataset-export")
+    if exports.exists():
+        api.upload_folder(
+            folder_path=str(exports),
+            path_in_repo="data",
+            repo_id=REPO_ID,
+            repo_type="dataset",
+            commit_message="Publish queryable Parquet research tables",
+        )
+        print("Queryable Parquet exports uploaded.")
     print("Historical archive uploaded.")
 
 if __name__ == "__main__":
