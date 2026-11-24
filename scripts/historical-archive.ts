@@ -341,9 +341,6 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
 async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const directory = path.join(ROOT, "trades", record.venue, record.mint);
   const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
-  const launchData = JSON.parse(await readFile(path.join(ROOT, "launches", record.venue, record.mint + ".json"), "utf8")) as { transaction?: { launchTransactionObservedMintSupplyRaw?: string | null; launchTransactionObservedMintDecimals?: number | null } };
-  const observedSupplyRaw = launchData.transaction?.launchTransactionObservedMintSupplyRaw ?? null;
-  const observedSupplyDecimals = launchData.transaction?.launchTransactionObservedMintDecimals ?? null;
   const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
   const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
   const seen = new Set<string>();
@@ -442,7 +439,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     return (data.walletProfiles ?? []).filter(p => p.launchFeePayer).map(p => p.wallet);
   }))];
   const summary = {
-    schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,\n    sourcePageCount: names.length, sourcePageFiles: names,
+    schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,
+    sourcePageCount: names.length, sourcePageFiles: names,
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
@@ -450,7 +448,6 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
       historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
-      launchTransactionTouchedAccountBalanceSumRaw: touchedBalanceSumRaw, launchTransactionTouchedAccountBalanceDecimals: touchedBalanceDecimals, launchTransactionTouchedBalanceSumIsNotTotalSupply: true,
       historicalHolderSnapshots: false, transactionEventAmounts: "decoded program events",
       walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
     }
