@@ -210,7 +210,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           lines.push(JSON.stringify({
             schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
             launchSignature: record.signature, signature: item.signature, sourceAddress: address,
-            slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
+            slot: item.slot, blockTime: item.blockTime!, secondsSinceLaunch: item.blockTime! - record.blockTime,
             eventTimestamp: event.timestamp, side: event.side, user: event.user,
             creator: record.creator, launchFeePayer: record.feePayer, launchSlot: record.slot, launchTime: record.blockTime,
             transactionFeePayer: signers(tx)[0] ?? null, fundingSources: extractFundingSources(tx, event.user),
@@ -358,7 +358,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
-    developerActivity: { creatorWallets, launchFeePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
+    developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
       historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
