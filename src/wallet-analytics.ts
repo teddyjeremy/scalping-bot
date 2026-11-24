@@ -241,6 +241,9 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
   const snipers = wallets.filter(p => p.sniperCandidate);
   const bots = wallets.filter(p => p.botScore >= 50);
   const bundled = wallets.filter(p => p.bundleCandidate);
+  const developerBots = developerCandidates.filter(p => p.botScore >= 50);
+  const creatorBots = creators.filter(p => p.botScore >= 50);
+  const sniperBots = snipers.filter(p => p.botScore >= 50);
   const fundingGroups = new Map<string, string[]>();
   const sameSlotGroups = new Map<number, string[]>();
   for (const profile of wallets) {
@@ -267,6 +270,12 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     sniperCandidateWallets: snipers.map(p => p.wallet),
     earlyBuyerWallets: earlyBuyers.map(p => p.wallet),
     botCandidateWallets: bots.map(p => p.wallet),
+    developerBotCandidateWallets: developerBots.map(p => p.wallet),
+    creatorBotCandidateWallets: creatorBots.map(p => p.wallet),
+    sniperBotCandidateWallets: sniperBots.map(p => p.wallet),
+    sniperCandidateCount: snipers.length, botCandidateCount: bots.length,
+    bundledEntryCandidateCount: bundled.length, developerBotCandidateCount: developerBots.length,
+    creatorBotCandidateCount: creatorBots.length, sniperBotCandidateCount: sniperBots.length,
     bundledEntryCandidateWallets: bundled.map(p => p.wallet),
     creatorBuyQuote: creators.reduce((n, p) => n + p.quoteSpent, 0),
     creatorSellQuote: creators.reduce((n, p) => n + p.quoteReceived, 0),
@@ -286,6 +295,9 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     launchFeePayerExactBuyQuote: devFeePayers.reduce((n, p) => n + (p.exactQuoteSpent ?? 0), 0),
     launchFeePayerExactSellQuote: devFeePayers.reduce((n, p) => n + (p.exactQuoteReceived ?? 0), 0),
     sniperBuyQuote: snipers.reduce((n, p) => n + p.quoteSpent, 0),
+    sniperAverageFirstBuyDelaySeconds: snipers.length ? snipers.reduce((n, p) => n + (p.firstBuyElapsedSeconds ?? 0), 0) / snipers.length : null,
+    sniperEarliestFirstBuyDelaySeconds: snipers.length ? Math.min(...snipers.map(p => p.firstBuyElapsedSeconds ?? Infinity)) : null,
+    sniperLargestBuyQuote: snipers.length ? Math.max(...snipers.map(p => p.quoteSpent)) : 0,
     sniperSellQuote: snipers.reduce((n, p) => n + p.quoteReceived, 0),
     sniperNetworkFeesLamportsPaid: snipers.reduce((n, p) => n + (p.networkFeesLamportsPaid ?? 0), 0),
     sniperTokensBought: snipers.reduce((n, p) => n + p.tokenBought, 0),
@@ -293,6 +305,9 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     sniperRealizedPnlQuote: snipers.every(p => p.realizedPnlQuote != null) ? snipers.reduce((n, p) => n + (p.realizedPnlQuote ?? 0), 0) : null,
     sniperSameLaunchSlotWalletCount: snipers.filter(p => p.sameSlotAsLaunch).length,
     botCandidateBuyQuote: bots.reduce((n, p) => n + p.quoteSpent, 0),
+    botCandidateAverageTransactions: bots.length ? bots.reduce((n, p) => n + p.transactionCount, 0) / bots.length : 0,
+    developerBotBuyQuote: developerBots.reduce((n, p) => n + p.quoteSpent, 0),
+    developerBotSellQuote: developerBots.reduce((n, p) => n + p.quoteReceived, 0),
     botCandidateSellQuote: bots.reduce((n, p) => n + p.quoteReceived, 0),
     botCandidateNetworkFeesLamportsPaid: bots.reduce((n, p) => n + (p.networkFeesLamportsPaid ?? 0), 0),
     botCandidateTokensBought: bots.reduce((n, p) => n + p.tokenBought, 0),
