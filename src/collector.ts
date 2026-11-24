@@ -6,6 +6,7 @@ import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
+import { getTopLevelInstructions } from "./transaction-instructions.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -21,7 +22,7 @@ const TOKEN_PROGRAMS = new Set([
 const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
-const INVALID_QUOTE_MINTS = new Set([WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT]);
+const NON_TOKEN_MINTS = new Set([WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT]);
 const CREATE_LOG = /Program log: Instruction: Create(?:V2)?\s*$/im;
 const STONK_LAUNCH_LOG = /Program log: Instruction: Initialize(?:V2|WithToken2022)?\s*$/im;
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -212,7 +213,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     return;
   }
   const decimals = item.supplyDecimals ?? 6;
-  const tokenDivisor = 10 ** decimals, quoteDivisor = 10 ** quoteDecimals;
+  if (item.supplyDecimals == null || !Number.isInteger(item.supplyDecimals) || item.supplyDecimals < 0 || item.supplyDecimals > 18) {\n    await appendTokenEvent(item.mint, { schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, quoteMint, pricingAvailable: false, reason: "Token decimals are not verified; refusing to assume six decimals." });\n    return;\n  }\n  const tokenDivisor = 10 ** decimals, quoteDivisor = 10 ** quoteDecimals;
   const virtualToken = Number(curve.virtualTokenRaw) / tokenDivisor;
   const virtualQuote = Number(curve.virtualSolLamports) / quoteDivisor;
   const realToken = Number(curve.realTokenRaw) / tokenDivisor;
@@ -363,7 +364,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
   const latest = observations[observations.length - 1];
-  if (item.venue === "stonkfun" || metrics.priceSource !== "pump_bonding_curve_virtual_reserves" || metrics.curveComplete === true) {
+  if (item.venue === "stonkfun" || metrics.priceSource !== "pump_bonding_curve_virtual_reserves") {
     metrics.firstPriceQuote ??= latest.priceQuote;
     metrics.firstPriceSol ??= latest.priceSol;
     metrics.firstPriceUsd ??= latest.priceUsd;
@@ -502,7 +503,7 @@ function isCreateTransaction(tx: ParsedTransactionWithMeta): boolean {
   return pumpCreateInstructions(tx).length > 0;
 }
 function createdPumpMints(tx: ParsedTransactionWithMeta): string[] {
-  return [...new Set(pumpCreateInstructions(tx).map(instruction => instruction.mint).filter(mint => mint && !INVALID_QUOTE_MINTS.has(mint)))];
+  return [...new Set(pumpCreateInstructions(tx).map(instruction => instruction.mint).filter(mint => mint && !NON_TOKEN_MINTS.has(mint)))];
 }
 async function isMintAccount(mint: string): Promise<boolean> {
   try {
@@ -926,7 +927,7 @@ async function loadState() {
       launchSignature: "3mR3oyYXHEPWWCUhv3URSCjVXABTUoGDv4eowDGJp5Dv522sghdc66janYMgm7KU4uLYwRmvTXV5CQuV6voRwQUw",
       rawPath: `raw/pumpfun/${WRAPPED_SOL_MINT}/events.jsonl`, retainedForAudit: true
     };
-    for (const mint of INVALID_QUOTE_MINTS) {
+    for (const mint of NON_TOKEN_MINTS) {
       if (state.tokens[mint]) qualityManifest.quarantinedMints[mint] = { status: "excluded", reason: "Quote asset is not a newly launched Pump token.", rawPath: `raw/pumpfun/${mint}/events.jsonl`, retainedForAudit: true };
       delete state.tokens[mint];
     }
@@ -941,28 +942,39 @@ async function loadState() {
 async function auditExistingLaunches() {
   let changed = false;
   for (const item of Object.values(state.tokens)) {
-    if (item.launchVerified === true) continue;
     const tx = await fetchTransaction(item.launchSignature);
-    if (!tx) {
-      console.warn("Existing token awaits launch verification; not subscribing yet:", item.mint);
+    if (!tx || tx.meta?.err) {
+      console.warn("Existing token awaits successful launch-transaction verification; preserving checkpoint:", item.mint);
       continue;
     }
-    const create = pumpCreateInstructions(tx).find(instruction => instruction.mint === item.mint);
-    const validMint = create ? await isMintAccount(item.mint) : false;
-    if (!create || !validMint) {
+    const validMint = await isMintAccount(item.mint);
+    if (validMint == null) {
+      console.warn("Existing token awaits mint-owner RPC verification; preserving checkpoint:", item.mint);
+      continue;
+    }
+    const isStonk = item.venue === "stonkfun";
+    const pumpCreate = isStonk ? undefined : pumpCreateInstructions(tx).find(instruction => instruction.mint === item.mint);
+    const stonkLaunch = isStonk ? stonkFunLaunchInstructions(tx).find(instruction => instruction.mint === item.mint) : undefined;
+    const validInstruction = isStonk
+      ? Boolean(stonkLaunch && stonkLaunch.pool === item.poolAddress && stonkLaunch.quoteMint === item.quoteMint)
+      : Boolean(pumpCreate);
+    if (!validInstruction || !validMint) {
       qualityManifest.quarantinedMints[item.mint] = {
-        status: "excluded", reason: "Stored launch signature does not contain a matching top-level Pump create/create_v2 instruction and token-mint account.",
-        launchSignature: item.launchSignature, rawPath: `raw/pumpfun/${item.mint}/events.jsonl`, retainedForAudit: true
+        status: "excluded", reason: isStonk
+          ? "Stored StonkFun launch does not match a top-level LaunchLab initializer, configured StonkFun platform config, stored pool/quote mint and token-mint owner."
+          : "Stored launch signature does not contain a matching top-level Pump create/create_v2 instruction and token-mint owner.",
+        launchSignature: item.launchSignature, venue: item.venue ?? "pumpfun",
+        rawPath: `raw/${item.venue ?? "pumpfun"}/${item.mint}/events.jsonl`, retainedForAudit: true
       };
       delete state.tokens[item.mint];
       changed = true;
-      console.warn("Quarantined unverified historical mint:", item.mint);
+      console.warn("Quarantined launch that failed strict revalidation:", item.mint);
     } else {
       item.launchVerified = true;
-      item.launchInstruction = create.kind;
-      item.venue ??= "pumpfun";
+      if (pumpCreate) item.launchInstruction = pumpCreate.kind;
+      if (stonkLaunch) item.launchInstruction = stonkLaunch.kind;
       changed = true;
-      console.log("Historical launch verified against Pump IDL discriminator:", item.mint, create.kind);
+      console.log("Revalidated stored launch against top-level venue initializer:", item.mint);
     }
   }
   if (changed) await persistState();
@@ -994,7 +1006,7 @@ async function shutdown(reason: string) {
 async function main() {
   await loadState();
   await auditExistingLaunches();
-  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !INVALID_QUOTE_MINTS.has(item.mint));
+  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !NON_TOKEN_MINTS.has(item.mint));
   const restoreTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() || (state.pendingActivity?.[item.mint]?.length ?? 0) > 0);
   await restoreTokenEvents(restoreTokens.map(item => ({ mint: item.mint, venue: item.venue })));
   await retryPendingActivityTransactions();
