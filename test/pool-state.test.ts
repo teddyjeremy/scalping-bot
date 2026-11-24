@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PublicKey } from "@solana/web3.js";
-import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount } from "../src/pool-state.js";
+import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 
 const key = (byte: number) => new PublicKey(Buffer.alloc(32, byte)).toBase58();
 
@@ -53,4 +53,25 @@ test("reads SPL token account amount only when its mint matches", () => {
   data.writeBigUInt64LE(123456n, 64);
   assert.equal(decodeTokenAccountAmount(data, key(8)), 123456n);
   assert.equal(decodeTokenAccountAmount(data, key(9)), null);
+});
+
+test("discovers a PumpSwap pool only from a matching top-level buy or sell instruction", () => {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const encode = (bytes: Uint8Array) => {
+    let value = 0n;
+    for (const byte of bytes) value = (value << 8n) + BigInt(byte);
+    let output = "";
+    while (value > 0n) { const digit = Number(value % 58n); output = alphabet[digit] + output; value /= 58n; }
+    return output;
+  };
+  const buy = encode(Uint8Array.from([102, 6, 61, 18, 1, 218, 235, 234, 1]));
+  const sell = encode(Uint8Array.from([51, 230, 133, 164, 1, 127, 131, 173, 1]));
+  const programId = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+  const result = findPumpSwapPoolFromInstructions([
+    { programId, data: buy, accounts: ["pool", "user", "config", "mint", "quote"] }
+  ], "mint");
+  assert.deepEqual(result, { pool: "pool", quoteMint: "quote", side: "buy" });
+  assert.equal(findPumpSwapPoolFromInstructions([
+    { programId, data: sell, accounts: ["pool2", "user", "config", "other-mint", "quote"] }
+  ], "mint"), null);
 });
