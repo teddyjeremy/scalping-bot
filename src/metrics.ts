@@ -50,6 +50,8 @@ export type TradeObservation = {
   creatorFeeMint?: string | null;
   inputTransferFeeRaw?: string | null;
   outputTransferFeeRaw?: string | null;
+  preTradeSpotPriceQuote?: number | null;
+  priceImpactPct?: number | null;
 };
 
 /**
