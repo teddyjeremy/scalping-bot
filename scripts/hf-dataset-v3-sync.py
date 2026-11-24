@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Idempotent per-coin publisher/restorer for the v3 Solana dataset."""
+import hashlib
+import json
+import os
+import shutil
+import sys
+from datetime import datetime, timezone
+from io import BytesIO
+from pathlib import Path
+
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+
+REPO_ID = "ndeda/solana-scalping-data"
+TOKEN = os.environ.get("HF_TOKEN")
+if not TOKEN:
+    raise SystemExit("HF_TOKEN is missing")
+API = HfApi(token=TOKEN)
+ROOT = Path(os.environ.get("DATA_DIR", "./historical-data"))
+REMOTE_ROOT = "dataset_v3"
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def upload_verified(path_in_repo: str, data: bytes, message: str) -> str:
+    expected = digest(data)
+    API.upload_file(
+        path_or_fileobj=BytesIO(data),
+        path_in_repo=path_in_repo,
+        repo_id=REPO_ID,
+        repo_type="dataset",
+        commit_message=message,
+    )
+    downloaded = Path(hf_hub_download(
+        repo_id=REPO_ID, filename=path_in_repo, repo_type="dataset",
+        token=TOKEN, force_download=True,
+    )).read_bytes()
+    actual = digest(downloaded)
+    if actual != expected:
+        raise RuntimeError(f"Remote readback hash mismatch for {path_in_repo}: expected {expected}, got {actual}")
+    return expected
+
+
+def mint_parts(venue: str, mint: str):
+    shard = hashlib.sha256(mint.encode()).hexdigest()
+    return shard[:2], shard[:4]
+
+
+def ledger_remote(venue: str, mint: str) -> str:
+    a, b = mint_parts(venue, mint)
+    return f"{REMOTE_ROOT}/control/ledger/{venue}/{a}/{b}/{mint}.json"
+
+
+def load_remote_json(path: str):
+    try:
+        local = hf_hub_download(repo_id=REPO_ID, filename=path, repo_type="dataset", token=TOKEN, force_download=True)
+        return json.loads(Path(local).read_text(encoding="utf-8"))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "404" in msg or "not found" in msg or "does not exist" in msg:
+            return None
+        raise
+
+
+def local_coin_files(venue: str, mint: str):
+    shard, _ = mint_parts(venue, mint)
+    launch = ROOT / "launches" / venue / shard / f"{mint}.json"
+    summary = ROOT / "launches" / venue / shard / f"{mint}.summary.json"
+    trades = ROOT / "trades" / venue / shard / mint
+    files = []
+    if launch.is_file():
+        files.append(("launch", launch, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/launch.json"))
+    if summary.is_file():
+        files.append(("summary", summary, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/summary.json"))
+    if trades.is_dir():
+        for file in sorted(trades.glob("*.jsonl")):
+            files.append(("trade_page", file, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/transaction_pages/{file.name}"))
+    return files
+
+
+def publish_coin(venue: str, mint: str, changed_paths=None):
+    if venue not in ("pumpfun", "stonkfun"):
+        raise SystemExit(f"Unsupported venue: {venue}")
+    files = local_coin_files(venue, mint)
+    if not files:
+        raise RuntimeError(f"No local coin files found for {venue}/{mint}")
+    ledger_path = ledger_remote(venue, mint)
+    ledger = load_remote_json(ledger_path) or {
+        "schema_version": "3.0.0", "mint": mint, "launch_venue": venue,
+        "state": "DISCOVERED", "dataset_paths": [], "content_hashes": {},
+        "streams": {}, "attempt_count": 0,
+    }
+    paths = set(ledger.get("dataset_paths", []))
+    hashes = dict(ledger.get("content_hashes", {}))
+    uploaded_trade_count = 0
+    uploaded_failed_count = 0
+    summary = None
+
+    for kind, local_file, remote_path in files:
+        raw = local_file.read_bytes()
+        if kind == "trade_page":
+            lines = [line for line in raw.splitlines() if line.strip()]
+            trade_lines, failed_lines = [], []
+            for line in lines:
+                row = json.loads(line)
+                if row.get("recordType") == "historical_failed_transaction":
+                    failed_lines.append(line)
+                elif row.get("recordType") == "historical_trade_event":
+                    trade_lines.append(line)
+            stem = local_file.stem
+            base = remote_path.rsplit("/", 1)[0]
+            outputs = [
+                (f"{base}/trade_events/{stem}.jsonl", b"\n".join(trade_lines) + (b"\n" if trade_lines else b""), len(trade_lines)),
+                (f"{base}/failed_transactions/{stem}.jsonl", b"\n".join(failed_lines) + (b"\n" if failed_lines else b""), len(failed_lines)),
+                (remote_path, raw, len(lines)),
+            ]
+            for target, data, count in outputs:
+                h = upload_verified(target, data, f"Publish coin observations: {mint}")
+                paths.add(target)
+                hashes[target] = h
+            uploaded_trade_count += len(trade_lines)
+            uploaded_failed_count += len(failed_lines)
+        else:
+            h = upload_verified(remote_path, raw, f"Publish coin {kind}: {mint}")
+            paths.add(remote_path)
+            hashes[remote_path] = h
+            if kind == "summary":
+                summary = json.loads(raw)
+
+    if summary is None:
+        local_summary = ROOT / "launches" / venue / mint_parts(venue, mint)[0] / f"{mint}.summary.json"
+        if local_summary.is_file():
+            summary = json.loads(local_summary.read_text(encoding="utf-8"))
+
+    checkpoint = ROOT / "checkpoint.json"
+    if checkpoint.is_file():
+        cp_remote = f"{REMOTE_ROOT}/control/checkpoint.json"
+        cp_hash = upload_verified(cp_remote, checkpoint.read_bytes(), "Publish resumable collection checkpoint")
+        paths.add(cp_remote)
+        hashes[cp_remote] = cp_hash
+
+    capture_complete = bool((summary or {}).get("capture", {}).get("complete"))
+    ledger.update({
+        "schema_version": "3.0.0",
+        "mint": mint,
+        "launch_venue": venue,
+        "state": "COMPLETE" if capture_complete else "COLLECTING",
+        "validation": {
+            "level": "COMPLETE" if capture_complete else ("PARTIAL" if uploaded_trade_count or uploaded_failed_count else "METADATA_ONLY"),
+            "errors": [],
+        },
+        "dataset_paths": sorted(paths),
+        "content_hashes": hashes,
+        "streams": {
+            "trade_events": {"status": "partial" if not capture_complete else "complete", "last_publish_trade_rows": uploaded_trade_count},
+            "failed_transactions": {"status": "partial" if not capture_complete else "complete", "last_publish_rows": uploaded_failed_count},
+        },
+        "capture": (summary or {}).get("capture"),
+        "launch_signature": (summary or {}).get("launchSignature"),
+        "launch_time_utc": datetime.fromtimestamp((summary or {}).get("launchTime", 0), timezone.utc).isoformat() if (summary or {}).get("launchTime") else None,
+        "last_verified_at": now(),
+        "updated_at": now(),
+        "completion_rule": "COMPLETE only after per-file remote readback SHA-256 verification and summary capture.complete=true",
+    })
+    ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
+    API.upload_file(
+        path_or_fileobj=BytesIO(ledger_bytes), path_in_repo=ledger_path,
+        repo_id=REPO_ID, repo_type="dataset",
+        commit_message=f"Update resumable coin ledger: {venue}/{mint} ({ledger['state']})",
+    )
+    remote_ledger = Path(hf_hub_download(
+        repo_id=REPO_ID, filename=ledger_path, repo_type="dataset", token=TOKEN, force_download=True,
+    )).read_bytes()
+    if digest(remote_ledger) != digest(ledger_bytes):
+        raise RuntimeError(f"Ledger readback verification failed for {venue}/{mint}")
+    print(f"V3 published {venue}/{mint}: state={ledger['state']} files={len(paths)} verified=true")
+
+
+def publish_batch(paths):
+    grouped = {}
+    for raw_path in paths:
+        p = Path(raw_path)
+        parts = p.parts
+        # launches/<venue>/<shard>/<mint>[.summary].json or trades/<venue>/<shard>/<mint>/<page>.jsonl
+        if len(parts) >= 4 and parts[0] == "launches":
+            venue, filename = parts[1], parts[3]
+            mint = filename.removesuffix(".summary.json").removesuffix(".json")
+        elif len(parts) >= 5 and parts[0] == "trades":
+            venue, mint = parts[1], parts[3]
+        else:
+            continue
+        grouped[(venue, mint)] = True
+    for venue, mint in sorted(grouped):
+        publish_coin(venue, mint)
+    checkpoint = ROOT / "checkpoint.json"
+    if checkpoint.is_file():
+        upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint")
+    if not grouped:
+        print("No coin files changed; checkpoint refreshed if present.")
+
+
+def restore():
+    ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        snapshot = Path(snapshot_download(
+            repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
+            allow_patterns=[f"{REMOTE_ROOT}/**"],
+        ))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "404" in msg or "not found" in msg or "does not exist" in msg:
+            print("No v3 archive exists yet; starting with a fresh local state.")
+            return
+        raise
+    base = snapshot / REMOTE_ROOT
+    cp = base / "control" / "checkpoint.json"
+    if cp.is_file():
+        shutil.copy2(cp, ROOT / "checkpoint.json")
+    raw = base / "raw"
+    if raw.exists():
+        for venue_dir in raw.iterdir():
+            if not venue_dir.is_dir():
+                continue
+            venue = venue_dir.name
+            for shard_dir in venue_dir.iterdir():
+                if not shard_dir.is_dir():
+                    continue
+                for mint_prefix_dir in shard_dir.iterdir():
+                    if not mint_prefix_dir.is_dir():
+                        continue
+                    for mint_dir in mint_prefix_dir.iterdir():
+                        if not mint_dir.is_dir():
+                            continue
+                        mint = mint_dir.name
+                        launch = mint_dir / "launch.json"
+                        summary = mint_dir / "summary.json"
+                        local_launch_dir = ROOT / "launches" / venue / shard_dir.name
+                        local_launch_dir.mkdir(parents=True, exist_ok=True)
+                        if launch.is_file():
+                            shutil.copy2(launch, local_launch_dir / f"{mint}.json")
+                        if summary.is_file():
+                            shutil.copy2(summary, local_launch_dir / f"{mint}.summary.json")
+                        page_dir = ROOT / "trades" / venue / shard_dir.name / mint
+                        pages = mint_dir / "transaction_pages"
+                        if pages.exists():
+                            page_dir.mkdir(parents=True, exist_ok=True)
+                            for page in pages.glob("*.jsonl"):
+                                shutil.copy2(page, page_dir / page.name)
+    print("Restored only dataset_v3 checkpoint and coin files. Legacy historical generations were not imported.")
+
+
+def write_test():
+    path = f"{REMOTE_ROOT}/_preflight/write-test-{os.environ.get('GITHUB_RUN_ID', 'manual')}.txt"
+    payload = b"temporary v3 dataset permission check\n"
+    h = upload_verified(path, payload, "Preflight: verify v3 dataset write/read access")
+    API.delete_file(path_in_repo=path, repo_id=REPO_ID, repo_type="dataset", commit_message="Preflight: remove v3 test file")
+    print(f"V3 write/read/delete verified: {h}")
+
+
+if __name__ == "__main__":
+    command = sys.argv[1] if len(sys.argv) > 1 else ""
+    if command == "restore":
+        restore()
+    elif command == "write-test":
+        write_test()
+    elif command == "publish-batch":
+        publish_batch(sys.argv[2:])
+    elif command == "publish-coin" and len(sys.argv) == 4:
+        publish_coin(sys.argv[2], sys.argv[3])
+    else:
+        raise SystemExit("Use restore, write-test, publish-batch [local paths...], or publish-coin VENUE MINT")
