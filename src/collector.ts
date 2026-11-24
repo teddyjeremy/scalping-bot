@@ -91,6 +91,7 @@ let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string
 };
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
 const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; timer?: NodeJS.Timeout }>();
+const activitySignatures = new Map<string, Set<string>>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
 let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
