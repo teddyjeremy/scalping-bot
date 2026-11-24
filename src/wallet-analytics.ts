@@ -109,8 +109,12 @@ export function updateWalletProfile(
   }
   profile.observedNetTokenChange = profile.tokenBought - profile.tokenSold;
   profile.sameSlotAsLaunch ||= context.slot === context.launchSlot;
-  profile.sniperCandidate ||= trade.side === "buy" && profile.firstBuyElapsedSeconds != null && profile.firstBuyElapsedSeconds <= 5;
-  profile.bundleCandidate ||= trade.side === "buy" && context.slot <= context.launchSlot + 1 && context.slot >= context.launchSlot;
+  const launchSlotOffset = context.slot - context.launchSlot;
+  profile.sniperCandidate ||= trade.side === "buy" && (
+    (profile.firstBuyElapsedSeconds != null && profile.firstBuyElapsedSeconds <= 5) ||
+    (launchSlotOffset >= 0 && launchSlotOffset <= 12)
+  );
+  profile.bundleCandidate ||= trade.side === "buy" && launchSlotOffset >= 0 && launchSlotOffset <= 1;
 
   const signals = new Set(profile.botSignals);
   const rapidTransactions = profile.recentTransactionTimes.length;
