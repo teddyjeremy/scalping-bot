@@ -19,6 +19,10 @@ export type DiscoveryCandidateInput = {
   minFdvUsd?: number;
   maxFdvUsd?: number;
   maxLaunchAgeSeconds?: number;
+  holderSnapshotVerified?: boolean;
+  top20HolderSharePct?: number | null;
+  creatorHoldingSharePct?: number | null;
+  feePayerHoldingSharePct?: number | null;
 };
 export type GateResult = { eligible: boolean; reasons: string[]; warnings: string[] };
 
@@ -100,7 +104,13 @@ export function evaluateDiscoveryCandidate(input: DiscoveryCandidateInput): Gate
   if (!Number.isFinite(input.launchAgeSeconds) || input.launchAgeSeconds < 30 || input.launchAgeSeconds > ageLimit) reasons.push(input.launchAgeSeconds < 30 ? "observe_first_30_seconds" : "outside_discovery_age_window");
   if (input.fdvUsd == null || !Number.isFinite(input.fdvUsd)) reasons.push("fdv_unavailable_or_untrusted");
   else if (input.fdvUsd < minFdv || input.fdvUsd > maxFdv) reasons.push("fdv_outside_5000_10000_usd");
-  if (input.launchAgeSeconds >= 30) {\n    if (input.holderSnapshotVerified !== true || input.top20HolderSharePct == null) reasons.push("holder_distribution_snapshot_unverified");\n    if (input.top20HolderSharePct != null && input.top20HolderSharePct > 90) reasons.push("top20_holder_concentration_above_90_percent");\n    if (input.creatorHoldingSharePct != null && input.creatorHoldingSharePct > 30) reasons.push("creator_holds_over_30_percent_of_supply");\n    if (input.feePayerHoldingSharePct != null && input.feePayerHoldingSharePct > 30) reasons.push("launch_fee_payer_holds_over_30_percent_of_supply");\n  }\n  const mint = evaluateMintSafety(input.mint);
+  if (input.launchAgeSeconds >= 30) {
+    if (input.holderSnapshotVerified !== true || input.top20HolderSharePct == null) reasons.push("holder_distribution_snapshot_unverified");
+    if (input.top20HolderSharePct != null && input.top20HolderSharePct > 90) reasons.push("top20_holder_concentration_above_90_percent");
+    if (input.creatorHoldingSharePct != null && input.creatorHoldingSharePct > 30) reasons.push("creator_holds_over_30_percent_of_supply");
+    if (input.feePayerHoldingSharePct != null && input.feePayerHoldingSharePct > 30) reasons.push("launch_fee_payer_holds_over_30_percent_of_supply");
+  }
+  const mint = evaluateMintSafety(input.mint);
   const liquidity = evaluateLiquiditySafety(input.liquidity);
   reasons.push(...mint.reasons, ...liquidity.reasons);
   warnings.push(...mint.warnings, ...liquidity.warnings);
