@@ -834,7 +834,7 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
 
 async function recordRaydiumCpmmPoolSnapshot(item: TokenState, poolAddress: string, connection: Connection, slot: number) {
   const poolInfo = await connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
-  if (!poolInfo || !poolInfo.owner.equals(RAYDIUM_CPMM_PROGRAM)) return;
+  if (!poolInfo || !poolInfo.owner.equals(new PublicKey(RAYDIUM_CPMM_PROGRAM))) return;
   const pool = decodeRaydiumCpmmPoolState(poolInfo.data);
   if (!pool || (pool.token0Mint !== item.mint && pool.token1Mint !== item.mint)) return;
   const baseIsToken0 = pool.token0Mint === item.mint;
