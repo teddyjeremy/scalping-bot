@@ -219,7 +219,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         "last_verified_at": now(),
         "completion_rule": "COMPLETE only after per-file remote readback SHA-256 verification and summary capture.complete=true",
     })
-    ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\\n").encode()
+    ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
     API.upload_file(
         path_or_fileobj=BytesIO(ledger_bytes), path_in_repo=ledger_path,
         repo_id=REPO_ID, repo_type="dataset",
@@ -332,7 +332,7 @@ def restore():
                     "sources": {address: {"complete": bool(info.get("complete", True)), "pages": int(info.get("pages") or 0)}
                                 for address, info in source_states.items()},
                 }
-        checkpoint_file.write_text(json.dumps(checkpoint_state, indent=2) + "\\n", encoding="utf-8")
+        checkpoint_file.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
     print("Restored dataset_v3 files and checkpoint; COMPLETE coin ledgers were reconciled. Legacy generations were not imported.")
 
 
