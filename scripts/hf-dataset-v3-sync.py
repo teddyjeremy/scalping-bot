@@ -156,8 +156,10 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
     trade_event_keys = set()
     trade_signatures = set()
     failed_signatures = set()
+    observation_signatures = set()
     trade_count = 0
     failed_count = 0
+    observation_count = 0
     duplicate_count = 0
     page_files = sorted((ROOT / "trades" / venue / mint_parts(venue, mint)[0] / mint).glob("*.jsonl"))
     for page_file in page_files:
@@ -170,6 +172,10 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
                 failed_count += 1
                 if signature:
                     failed_signatures.add(signature)
+            elif row.get("recordType") == "historical_transaction_observation":
+                observation_count += 1
+                if signature:
+                    observation_signatures.add(signature)
             elif row.get("recordType") == "historical_trade_event":
                 trade_count += 1
                 if signature:
@@ -210,6 +216,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
             "launch": stream("complete", 1 if launch_record else 0, {str(launch_record.get("signature"))} if launch_record.get("signature") else set()),
             "trade_events": stream(trade_status, trade_count, trade_signatures, duplicate_count),
             "failed_transactions": stream(failed_status, failed_count, failed_signatures),
+            "transaction_observations": stream(trade_status, observation_count, observation_signatures),
         },
         "validation": {
             "level": "COMPLETE" if capture_complete and research_ready else ("PARTIAL" if page_files else "METADATA_ONLY"),
