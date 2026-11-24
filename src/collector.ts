@@ -753,7 +753,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     const profile = metrics.walletProfiles[trade.wallet];
     metrics.recentTradeSignals!.push({
       at: observedAt, side: trade.side, quoteAmount: trade.quoteAmount, wallet: trade.wallet,
-      isCreator: profile.creator || profile.launchFeePayer, botScore: profile.botScore, confidence: trade.confidence
+      isCreator: profile.creator || profile.launchFeePayer, botScore: profile.botScore, confidence: trade.confidence, priceUsd: trade.priceUsd
     });
     metrics.recentTradeSignals = metrics.recentTradeSignals!.filter(signal => observedAt - signal.at <= 120_000).slice(-500);
     await appendTokenEvent(item.mint, {
@@ -1796,6 +1796,15 @@ async function screenDiscoveryCandidate(item: TokenState) {
       await appendTokenEvent(item.mint, { schemaVersion: 1, kind: "discovery_screen", mint: item.mint, eligible: false, reasons: item.discoveryReasons, launchAgeSeconds: ageSeconds, fdvUsd: item.fdvUsdAtScreen ?? null, observedAt: Date.now() });
       await persistState(); await stopDiscoveryWatch(item.mint); return;
     }
+    if (item.supplyUi == null || item.supplyDecimals == null) {
+      try {
+        const supply = await nextRpc().getTokenSupply(new PublicKey(item.mint), "confirmed");
+        item.supplyUi = supply.value.uiAmount;
+        item.supplyDecimals = supply.value.decimals;
+      } catch (error) {
+        console.warn("Supply metadata is not ready; candidate screening will retry:", item.mint, String(error).slice(0, 120));
+      }
+    }
     const mintSafety = await fetchMintRiskMetadata(item.mint);
     Object.assign(item, mintSafety);
     const valuation = await calculateCandidateFdv(item);
@@ -1871,7 +1880,15 @@ async function runPaperStrategy(item: TokenState) {
     now, launchAt: item.firstSeenAt, price: priceUsd, fdvUsd, quoteLiquidity: quoteLiquidityUsd,
     recentTrades, creatorSelling, reserveDropPct, priceImpactPctForOneDollar,
     securityPassed: item.discoveryStatus === "eligible", fdvMinUsd: 5_000, fdvMaxUsd: 10_000,
-    entryStartSeconds: 30, entryEndSeconds: 300, paperSizeUsd: 1
+    entryStartSeconds: 30, entryEndSeconds: 300, paperSizeUsd: 1,
+    volatilityPct: (() => {
+      const prices = recentTrades.map(trade => trade.priceUsd).filter((value): value is number => value != null && value > 0);
+      const returns = prices.slice(1).map((value, index) => (value / prices[index] - 1) * 100);
+      if (returns.length < 2) return 1;
+      const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+      return Math.sqrt(returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / returns.length);
+    })(),
+    venueFeePctPerSide: item.venue === "pumpfun" ? 1.25 : null
   }, item.paperPosition);
   metrics.lastRealQuoteReserveUsd = reserveUsd;
   if (decision.position) item.paperPosition = decision.position;
@@ -1891,7 +1908,10 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
   if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err || !isCreateTransaction(tx)) return;
   const mints = createdPumpMints(tx);
   for (const mint of mints) {
-    if (state.tokens[mint] || !await isMintAccount(mint)) continue;
+    if (state.tokens[mint]) continue;
+    const mintAccountValid = await isMintAccount(mint);
+    if (mintAccountValid == null) throw new Error("Mint-owner verification unavailable; launch will be retried: " + mint);
+    if (!mintAccountValid) continue;
     const feePayer = getAccountKey(tx.transaction.message.accountKeys[0]);
     const firstSeenAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
     let supplyUi: number | null = null;
@@ -1933,7 +1953,10 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
   const launches = stonkFunLaunchInstructions(tx);
   for (const launch of launches) {
     const { mint, quoteMint, pool, platformConfig, kind, creator } = launch;
-    if (state.tokens[mint] || !await isMintAccount(mint)) continue;
+    if (state.tokens[mint]) continue;
+    const mintAccountValid = await isMintAccount(mint);
+    if (mintAccountValid == null) throw new Error("Mint-owner verification unavailable; launch will be retried: " + mint);
+    if (!mintAccountValid) continue;
     const feePayer = getAccountKey(tx.transaction.message.accountKeys[0]);
     const firstSeenAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
     let supplyUi: number | null = null;
