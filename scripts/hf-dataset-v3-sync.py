@@ -211,7 +211,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
             "start_utc": iso_epoch(window.get("start")),
             "end_utc": iso_epoch(window.get("end")),
         },
-        "actual_coverage": None,
+        "actual_coverage": (summary or {}).get("capture", {}).get("timeCoverage"),
         "streams": {
             "launch": stream("complete", 1 if launch_record else 0, {str(launch_record.get("signature"))} if launch_record.get("signature") else set()),
             "trade_events": stream(trade_status, trade_count, trade_signatures, duplicate_count),
