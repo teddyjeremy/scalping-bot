@@ -1172,10 +1172,11 @@ async function auditExistingLaunches() {
   let changed = false;
   for (const item of Object.values(state.tokens)) {
     const tx = await fetchTransaction(item.launchSignature);
-    if (!tx || tx.meta?.err) {
-      console.warn("Existing token awaits successful launch-transaction verification; preserving checkpoint:", item.mint);
+    if (!tx || !tx.meta) {
+      console.warn("Existing token awaits launch-transaction metadata; preserving checkpoint for retry:", item.mint);
       continue;
     }
+    const transactionSucceeded = !tx.meta.err;
     const validMint = await isMintAccount(item.mint);
     if (validMint == null) {
       console.warn("Existing token awaits mint-owner RPC verification; preserving checkpoint:", item.mint);
@@ -1184,9 +1185,9 @@ async function auditExistingLaunches() {
     const isStonk = item.venue === "stonkfun";
     const pumpCreate = isStonk ? undefined : pumpCreateInstructions(tx).find(instruction => instruction.mint === item.mint);
     const stonkLaunch = isStonk ? stonkFunLaunchInstructions(tx).find(instruction => instruction.mint === item.mint) : undefined;
-    const validInstruction = isStonk
+    const validInstruction = transactionSucceeded && (isStonk
       ? Boolean(stonkLaunch && stonkLaunch.pool === item.poolAddress && stonkLaunch.quoteMint === item.quoteMint)
-      : Boolean(pumpCreate);
+      : Boolean(pumpCreate));
     if (!validInstruction || !validMint) {
       qualityManifest.quarantinedMints[item.mint] = {
         status: "excluded", reason: isStonk
