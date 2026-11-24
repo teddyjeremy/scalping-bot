@@ -120,7 +120,7 @@ type TokenMetrics = {
   largestBuySol: number;
   largestSellSol: number; largestBuyQuote: number; largestSellQuote: number;
   priceSource?: string;
-  estimatedCurveFeeBps?: number | null;
+  estimatedCurveFeeBps?: number | null;\n  top20HolderSharePct?: number | null; creatorHoldingSharePct?: number | null; feePayerHoldingSharePct?: number | null; holderDistributionSnapshotAt?: number | null;
   curveRealSolReserves?: number | null;
   curveRealTokenReserves?: number | null;
   curveVirtualSolReserves?: number | null;
@@ -248,7 +248,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
   metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.buyPriceImpactSamples ??= []; metrics.sellPriceImpactSamples ??= []; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
-  metrics.recentTradeSignals ??= []; metrics.lastRealQuoteReserveUsd ??= null;
+  metrics.recentTradeSignals ??= []; metrics.lastRealQuoteReserveUsd ??= null;\n  metrics.top20HolderSharePct ??= null; metrics.creatorHoldingSharePct ??= null; metrics.feePayerHoldingSharePct ??= null; metrics.holderDistributionSnapshotAt ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
@@ -452,6 +452,11 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
   const accountShare = (count: number) => sorted.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
   const creatorHolding = item.creator ? ownerTotals.has(item.creator) ? ownerTotals.get(item.creator)! / item.supplyUi * 100 : 0 : null;
   const feePayerHolding = item.launchFeePayer ? ownerTotals.has(item.launchFeePayer) ? ownerTotals.get(item.launchFeePayer)! / item.supplyUi * 100 : 0 : null;
+  const metrics = ensureMetrics(item);
+  metrics.top20HolderSharePct = walletShare(20);
+  metrics.creatorHoldingSharePct = creatorHolding;
+  metrics.feePayerHoldingSharePct = feePayerHolding;
+  metrics.holderDistributionSnapshotAt = Date.now();
   await appendTokenEvent(item.mint, {
     schemaVersion: 7, kind: "holder_distribution_snapshot", mint: item.mint, slot, elapsedSeconds, observedAt: Date.now(),
     holderScope: "top_20_token_accounts_from_getTokenLargestAccounts_aggregated_by_owner",
@@ -1671,7 +1676,8 @@ async function calculateCandidateFdv(item: TokenState): Promise<{ fdvUsd: number
     const priceQuote = virtualBase > 0 ? virtualQuote / virtualBase : null;
     const fdvUsd = priceQuote != null ? priceQuote * supply * quoteUsd : null;
     if (!curve.complete) {
-      const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: true, realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
+      if (curve.creator) item.creator = curve.creator;
+    const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: true, realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
       return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
     }
     if (!item.pumpSwapPoolAddress) {
@@ -1712,7 +1718,7 @@ async function calculateCandidateFdv(item: TokenState): Promise<{ fdvUsd: number
     if (!launchInfo || !launchInfo.owner.equals(LAUNCHLAB_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
     const launchPool = decodeLaunchLabPoolState(launchInfo.data);
     if (!launchPool || launchPool.baseMint !== item.mint || launchPool.quoteMint !== item.quoteMint || launchPool.platformConfig !== item.platformConfig) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
-    const quoteMint = launchPool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);
+    const quoteMint = launchPool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);\n    if (launchPool.creator) item.creator = launchPool.creator;
     if (launchPool.statusName === "funding") {
       const virtualBase = Number(launchPool.virtualBaseRaw) / (10 ** launchPool.baseDecimals);
       const virtualQuote = Number(launchPool.virtualQuoteRaw) / (10 ** launchPool.quoteDecimals);
@@ -1820,7 +1826,19 @@ async function screenDiscoveryCandidate(item: TokenState) {
       metrics.quoteDecimals = await getMintDecimals(valuation.quoteMint) ?? metrics.quoteDecimals ?? null;
       metrics.quoteSymbol = valuation.quoteMint === WRAPPED_SOL_MINT ? "SOL" : valuation.quoteMint === USDC_MINT ? "USDC" : valuation.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
     }
-    const result = evaluateDiscoveryCandidate({ launchAgeSeconds: ageSeconds, fdvUsd: valuation.fdvUsd, mint: mintSafety, liquidity: valuation.liquidity, minFdvUsd: 5_000, maxFdvUsd: 10_000, maxLaunchAgeSeconds: 300 });
+    const metrics = ensureMetrics(item);
+    if (ageSeconds >= 30 && metrics.holderDistributionSnapshotAt == null) {
+      try { await recordHolderDistributionSnapshot(item, Math.floor(ageSeconds), null); }
+      catch (error) { console.warn("Early holder snapshot will retry:", item.mint, String(error).slice(0, 120)); }
+    }
+    const result = evaluateDiscoveryCandidate({
+      launchAgeSeconds: ageSeconds, fdvUsd: valuation.fdvUsd, mint: mintSafety, liquidity: valuation.liquidity,
+      minFdvUsd: 5_000, maxFdvUsd: 10_000, maxLaunchAgeSeconds: 300,
+      holderSnapshotVerified: metrics.holderDistributionSnapshotAt != null,
+      top20HolderSharePct: metrics.top20HolderSharePct ?? null,
+      creatorHoldingSharePct: metrics.creatorHoldingSharePct ?? null,
+      feePayerHoldingSharePct: metrics.feePayerHoldingSharePct ?? null
+    });
     const reasonsChanged = JSON.stringify(result.reasons) !== JSON.stringify(item.discoveryReasons ?? []);
     item.discoveryReasons = result.reasons; item.discoveryLastCheckedAt = Date.now();
     if (reasonsChanged || result.eligible) await appendTokenEvent(item.mint, {
@@ -1884,6 +1902,8 @@ async function runPaperStrategy(item: TokenState) {
     now, launchAt: item.firstSeenAt, price: priceUsd, fdvUsd, quoteLiquidity: quoteLiquidityUsd,
     recentTrades, creatorSelling, reserveDropPct, priceImpactPctForOneDollar,
     securityPassed: item.discoveryStatus === "eligible", fdvMinUsd: 5_000, fdvMaxUsd: 10_000,
+    top20HolderSharePct: metrics.top20HolderSharePct ?? null,
+    creatorHoldingSharePct: metrics.creatorHoldingSharePct ?? null,
     entryStartSeconds: 30, entryEndSeconds: 300, paperSizeUsd: 1,
     volatilityPct: (() => {
       const prices = recentTrades.map(trade => trade.priceUsd).filter((value): value is number => value != null && value > 0);
