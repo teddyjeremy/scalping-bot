@@ -281,7 +281,11 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   const solUsd = await getSolUsd();
-  const quoteMint = ensureMetrics(item).quoteMint ?? "So11111111111111111111111111111111111111112";
+  const knownQuoteMint = ensureMetrics(item).quoteMint;
+  // Do not guess SOL while the curve account has not yet identified the actual quote asset.
+  // The raw transaction is still persisted by the caller for later decoding.
+  if (!knownQuoteMint) return;
+  const quoteMint = knownQuoteMint;
   const observations = deriveTradeObservations(tx, item.mint, solUsd, quoteMint);
   if (observations.length === 0) return;
   const metrics = ensureMetrics(item);
