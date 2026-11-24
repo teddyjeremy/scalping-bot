@@ -504,7 +504,7 @@ async function retryPendingActivityTransactions() {
 
 async function migrateQuarantinedMint(mint: string) {
   const entry = qualityManifest.quarantinedMints[mint];
-  if (!entry || entry.rawMovedToQuarantine === true) return;
+  if (!entry || entry.rawMovedToQuarantine === true || entry.status === "deleted") return;
   const reason = String(entry.reason ?? "Failed strict launch verification.");
   const moved = await quarantineRemoteMintFile(mint, reason);
   if (moved) {
