@@ -9,9 +9,12 @@ test("classifies a launch creator's buys and sells without conflating fee payer 
   assert.equal(afterSell.creator, true);
   assert.equal(afterSell.launchFeePayer, false);
   assert.equal(afterSell.observedNetTokenChange, 75);
-  const summary = summarizeWalletCohorts({ dev: afterSell });
+  const summary = summarizeWalletCohorts({ dev: afterSell }, 0.03);
   assert.equal(summary.creatorBuyQuote, 2);
   assert.equal(summary.creatorSellQuote, 1);
+  assert.equal(summary.creatorRealizedPnlQuote, 0.5);
+  assert.equal(summary.creatorUnrealizedPnlQuote, 0.75);
+  assert.equal(summary.creatorTotalObservedPnlQuote, 1.25);
 });
 
 test("marks very early buys and same-launch-slot entries as candidates, not proof", () => {
