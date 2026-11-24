@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[];
-  networkFeesLamports?: number | null; protocolFeesQuote?: number | null; creatorFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -219,7 +219,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.protocolFeesQuote ??= null; metrics.creatorFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
@@ -474,7 +474,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
         walletCohorts: metrics.walletCohorts ?? summarizeWalletCohorts(metrics.walletProfiles),
         networkFeesLamports: metrics.networkFeesLamports,
-        protocolFeesQuote: metrics.protocolFeesQuote, creatorFeesQuote: metrics.creatorFeesQuote,
+        protocolFeesQuote: metrics.protocolFeesQuote, platformFeesQuote: metrics.platformFeesQuote,
+        creatorFeesQuote: metrics.creatorFeesQuote, shareFeesQuote: metrics.shareFeesQuote,
         lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
         buybackFeesQuote: metrics.buybackFeesQuote,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
@@ -530,7 +531,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const solUsd = await getSolUsd();
   const metrics = ensureMetrics(item);
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
-  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint);
+  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, transactionInstructions(tx));
   const observations: import("./metrics.js").TradeObservation[] = [];
   if (decodedEvents.length > 0 && item.supplyDecimals != null) {
     for (const event of decodedEvents) {
@@ -557,8 +558,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
         solAmount: isSol ? quoteAmount : 0, priceSol: isSol ? priceQuote : null,
         priceUsd: quoteUsd == null ? null : priceQuote * quoteUsd,
         feeLamports: tx.meta?.fee ?? 0, pricingMethod: "decoded_program_trade_event", confidence: "high",
-        eventName: event.eventName, protocolFeeQuote: feeUi(event.protocolFeeRaw), lpFeeQuote: feeUi(event.lpFeeRaw),
-        creatorFeeQuote: feeUi(event.creatorFeeRaw), cashbackFeeQuote: feeUi(event.cashbackRaw),
+        eventName: event.eventName, protocolFeeQuote: feeUi(event.protocolFeeRaw),
+        platformFeeQuote: feeUi(event.platformFeeRaw), shareFeeQuote: feeUi(event.shareFeeRaw),
+        lpFeeQuote: feeUi(event.lpFeeRaw), creatorFeeQuote: feeUi(event.creatorFeeRaw), cashbackFeeQuote: feeUi(event.cashbackRaw),
         buybackFeeQuote: feeUi(event.buybackFeeRaw),
         protocolFeeBps: event.protocolFeeBps == null ? null : Number(event.protocolFeeBps),
         lpFeeBps: event.lpFeeBps == null ? null : Number(event.lpFeeBps),
@@ -588,6 +590,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.pricingMethod === "decoded_program_trade_event") metrics.exactTradeCount = (metrics.exactTradeCount ?? 0) + 1;
     else metrics.estimatedTradeCount = (metrics.estimatedTradeCount ?? 0) + 1;
     if (trade.protocolFeeQuote != null) metrics.protocolFeesQuote = (metrics.protocolFeesQuote ?? 0) + trade.protocolFeeQuote;
+    if (trade.platformFeeQuote != null) metrics.platformFeesQuote = (metrics.platformFeesQuote ?? 0) + trade.platformFeeQuote;
+    if (trade.shareFeeQuote != null) metrics.shareFeesQuote = (metrics.shareFeesQuote ?? 0) + trade.shareFeeQuote;
     if (trade.creatorFeeQuote != null) metrics.creatorFeesQuote = (metrics.creatorFeesQuote ?? 0) + trade.creatorFeeQuote;
     if (trade.lpFeeQuote != null) metrics.lpFeesQuote = (metrics.lpFeesQuote ?? 0) + trade.lpFeeQuote;
     if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
