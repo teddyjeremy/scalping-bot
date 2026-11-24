@@ -1,6 +1,8 @@
 name: Historical Solana research archive
 
 on:
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       start_date:
@@ -16,7 +18,7 @@ on:
       max_pages:
         description: "Maximum 100-signature pages per address per run"
         required: true
-        default: "20"
+        default: "100"
         type: string
 
 concurrency:
@@ -35,9 +37,9 @@ jobs:
       HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
       HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      HISTORY_START: "${{ inputs.start_date }}T00:00:00Z"
-      HISTORY_END: "${{ inputs.end_date }}T00:00:00Z"
-      HISTORY_MAX_PAGES_PER_RUN: ${{ inputs.max_pages }}
+      HISTORY_START: "${{ inputs.start_date || '2026-11-01' }}T00:00:00Z"
+      HISTORY_END: "${{ inputs.end_date || '2026-11-24' }}T00:00:00Z"
+      HISTORY_MAX_PAGES_PER_RUN: ${{ inputs.max_pages || '100' }}
       DATA_DIR: ./historical-data
     steps:
       - uses: actions/checkout@v4
