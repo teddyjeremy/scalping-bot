@@ -1,84 +1,119 @@
 import { mkdir, writeFile } from "node:fs/promises";
 
-const probes = [
-  ...[0, 1000, 10000, 100000, 500000, 1000000].map(offset => ({
-    name: `pumpfun_created_asc_offset_${offset}`,
-    url: `https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=5&sort=created_timestamp&order=ASC&includeNsfw=false`
-  })),
-  {
-    name: "pumpfun_created_desc_offset_0",
-    url: "https://frontend-api-v3.pump.fun/coins?offset=0&limit=5&sort=created_timestamp&order=DESC&includeNsfw=false"
-  },
-  {
-    name: "raydium_launchlab_created_asc",
-    url: "https://launch-mint-v1.raydium.io/get/list?size=5&sort=createdAt&sortType=asc"
-  },
-  {
-    name: "raydium_launchlab_created_desc",
-    url: "https://launch-mint-v1.raydium.io/get/list?size=5&sort=createdAt&sortType=desc"
-  },
-  {
-    name: "raydium_launchlab_sorttype_only",
-    url: "https://launch-mint-v1.raydium.io/get/list?size=5&sortType=asc"
-  }
-];
+const pumpOffsets = [0, 500, 1000, 1500, 2000, 3000, 5000, 8000, 12000];
+const pumpProbes = pumpOffsets.map(offset => ({
+  name: `pumpfun_created_asc_offset_${offset}`,
+  url: `https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=100&sort=created_timestamp&order=ASC&includeNsfw=false`
+}));
 
-async function inspect(probe) {
+async function requestJson(name, url) {
   const started = Date.now();
   try {
-    const response = await fetch(probe.url, {
+    const response = await fetch(url, {
       headers: { accept: "application/json", "user-agent": "solana-research-archive/1.0" },
-      signal: AbortSignal.timeout(20000)
+      signal: AbortSignal.timeout(25000)
     });
     const raw = await response.text();
     let body = null;
     try { body = JSON.parse(raw); } catch {}
-    const data = body?.data ?? body;
-    const rows = Array.isArray(data) ? data : Array.isArray(data?.rows) ? data.rows
-      : Array.isArray(data?.items) ? data.items : Array.isArray(data?.list) ? data.list : null;
-    const first = rows?.[0] ?? null;
-    const last = rows?.at(-1) ?? null;
-    const pick = item => item ? {
-      mint: item.mint ?? item.address ?? item.baseMint ?? item.mintA?.address ?? null,
-      createdTimestamp: item.created_timestamp ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
-      signature: item.signature ?? item.txid ?? item.createTx ?? item.createTxId ?? null,
-      pool: item.pool ?? item.poolId ?? item.id ?? null
-    } : null;
     return {
-      name: probe.name, httpStatus: response.status, ok: response.ok,
-      elapsedMs: Date.now() - started, contentType: response.headers.get("content-type"),
-      topLevelKeys: body && typeof body === "object" ? Object.keys(body).slice(0, 30) : [],
-      dataKeys: data && typeof data === "object" && !Array.isArray(data) ? Object.keys(data).slice(0, 40) : [],
-      rowCount: rows?.length ?? null,
-      firstRowKeys: first && typeof first === "object" ? Object.keys(first).slice(0, 60) : [],
-      pagination: data && typeof data === "object" ? {
-        nextPageId: data.nextPageId ?? data.next_page_id ?? null,
-        total: data.total ?? null,
-        hasMore: data.hasMore ?? data.has_more ?? null
-      } : null,
-      first: pick(first), last: pick(last),
-      bodyPreview: rows ? null : raw.slice(0, 500)
+      name, url, httpStatus: response.status, ok: response.ok,
+      elapsedMs: Date.now() - started,
+      body,
+      bodyPreview: body ? null : raw.slice(0, 500)
     };
   } catch (error) {
-    return { name: probe.name, ok: false, elapsedMs: Date.now() - started, error: String(error).slice(0, 400) };
+    return { name, url, ok: false, elapsedMs: Date.now() - started, error: String(error).slice(0, 400) };
   }
 }
 
+function rowsFrom(body) {
+  const data = body?.data ?? body;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.rows)) return data.rows;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.list)) return data.list;
+  return [];
+}
+
+function summarize(name, result) {
+  const rows = rowsFrom(result.body);
+  const first = rows[0] ?? null;
+  const last = rows.at(-1) ?? null;
+  const pick = item => item ? {
+    mint: item.mint ?? item.address ?? item.baseMint ?? null,
+    createdTimestamp: item.created_timestamp ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
+    creator: item.creator ?? item.creatorAddress ?? null,
+    pool: item.pool ?? item.poolId ?? item.id ?? null
+  } : null;
+  const data = result.body?.data ?? result.body;
+  return {
+    name, url: result.url, httpStatus: result.httpStatus, ok: result.ok,
+    elapsedMs: result.elapsedMs, rowCount: rows.length,
+    firstRowKeys: first ? Object.keys(first).slice(0, 60) : [],
+    pagination: data && typeof data === "object" ? {
+      nextPageId: data.nextPageId ?? data.next_page_id ?? null,
+      total: data.total ?? null,
+      hasMore: data.hasMore ?? data.has_more ?? null
+    } : null,
+    first: pick(first), last: pick(last),
+    error: result.error ?? null,
+    bodyPreview: result.bodyPreview ?? null
+  };
+}
+
 const results = [];
-for (const probe of probes) results.push(await inspect(probe));
+for (const probe of pumpProbes) {
+  const response = await requestJson(probe.name, probe.url);
+  results.push(summarize(probe.name, response));
+}
+
+const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
+const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
+const raydiumFirst = await requestJson(
+  "raydium_launchlab_new_page_1",
+  `${raydiumBase}?${raydiumParams}`
+);
+results.push(summarize("raydium_launchlab_new_page_1", raydiumFirst));
+
+const raydiumData = raydiumFirst.body?.data ?? {};
+const nextPageId = raydiumData?.nextPageId ?? null;
+if (raydiumFirst.ok && raydiumFirst.body?.success === true && nextPageId) {
+  const second = await requestJson(
+    "raydium_launchlab_new_page_2",
+    `${raydiumBase}?${raydiumParams}&nextPageId=${encodeURIComponent(nextPageId)}`
+  );
+  results.push(summarize("raydium_launchlab_new_page_2", second));
+} else {
+  results.push({
+    name: "raydium_launchlab_new_page_2",
+    skipped: true,
+    reason: "First page did not return a success envelope with nextPageId"
+  });
+}
+
+const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
+const raydiumHasRows = results.some(r => r.name === "raydium_launchlab_new_page_1" && r.ok && r.rowCount > 0 && r.first?.mint);
+const raydiumCursorObserved = results.some(r => r.name === "raydium_launchlab_new_page_1" && r.pagination?.nextPageId);
+
 const report = {
   generatedAt: new Date().toISOString(),
-  purpose: "Read-only launch discovery endpoint compatibility and pagination probe; no Helius calls and no dataset writes",
+  purpose: "Read-only discovery API pagination probe. No Helius calls and no dataset writes.",
   historicalCollectionStarted: false,
   datasetWritten: false,
+  pumpOffsetsTested: pumpOffsets,
+  raydiumPagination: "cursor-based nextPageId, using official Raydium SDK example parameters",
+  checks: {
+    pumpfunIndexReturnsRows: pumpHasRows,
+    raydiumLaunchLabIndexReturnsRows: raydiumHasRows,
+    raydiumCursorObserved
+  },
+  status: pumpHasRows && raydiumHasRows ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified",
   results
 };
+
 console.log("LAUNCH_DISCOVERY_PROBE_REPORT");
 console.log(JSON.stringify(report, null, 2));
 await mkdir("launch-discovery-probe-output", { recursive: true });
 await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\n");
-const requiredSources = ["pumpfun_created_asc_offset_0", "raydium_launchlab_created_asc"];
-const requiredPassed = requiredSources.every(name => results.some(result => result.name === name && result.ok && result.rowCount > 0 && result.first?.mint));
-report.status = requiredPassed ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified";
-await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\\n");
-if (!requiredPassed) process.exitCode = 2;
+if (!pumpHasRows || !raydiumHasRows) process.exitCode = 2;
