@@ -5,9 +5,15 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
+import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+const LAUNCHLAB_PROGRAM = new PublicKey("LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj");
+const STONKFUN_PLATFORM_CONFIGS = new Set([
+  "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt",
+  "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"
+]);
 const TOKEN_PROGRAMS = new Set([
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -17,6 +23,7 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const INVALID_QUOTE_MINTS = new Set([WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT]);
 const CREATE_LOG = /Program log: Instruction: Create(?:V2)?\s*$/im;
+const STONK_LAUNCH_LOG = /Program log: Instruction: Initialize(?:V2|WithToken2022)?\s*$/im;
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const CAPTURE_MS = Number(process.env.CAPTURE_MINUTES ?? 10) * 60_000;
 const RUN_FOR_MS = Number(process.env.RUN_FOR_MINUTES ?? 0) * 60_000;
@@ -55,7 +62,8 @@ type TokenMetrics = {
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string;
-  launchVerified?: boolean; launchInstruction?: "create" | "create_v2";
+  launchVerified?: boolean; launchInstruction?: "create" | "create_v2" | "initialize" | "initialize_v2" | "initialize_with_token_2022";
+  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
   metrics?: TokenMetrics;
@@ -79,6 +87,7 @@ let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
 const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; timer?: NodeJS.Timeout }>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
+let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
 let runTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
@@ -402,11 +411,16 @@ function getAccountKey(key: unknown): string {
   if (key && typeof key === "object" && "pubkey" in key) return String((key as { pubkey: unknown }).pubkey);
   return String(key);
 }
+function transactionInstructions(tx: ParsedTransactionWithMeta) {
+  const topLevel = tx.transaction.message.instructions as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>;
+  const inner = (tx.meta?.innerInstructions ?? []).flatMap(group => group.instructions) as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>;
+  return [...topLevel, ...inner];
+}
 function pumpCreateInstructions(tx: ParsedTransactionWithMeta) {
-  return findPumpCreateInstructions(
-    tx.transaction.message.instructions as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
-    PUMP_PROGRAM.toBase58()
-  );
+  return findPumpCreateInstructions(transactionInstructions(tx), PUMP_PROGRAM.toBase58());
+}
+function stonkFunLaunchInstructions(tx: ParsedTransactionWithMeta) {
+  return findStonkFunLaunchInstructions(transactionInstructions(tx), LAUNCHLAB_PROGRAM.toBase58(), STONKFUN_PLATFORM_CONFIGS);
 }
 function isCreateTransaction(tx: ParsedTransactionWithMeta): boolean {
   return pumpCreateInstructions(tx).length > 0;
