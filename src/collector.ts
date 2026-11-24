@@ -427,7 +427,7 @@ async function persistState() {
 async function appendTokenEvent(mint: string, event: Record<string, unknown>) {
   await mkdir(path.join(DATA_DIR, "tokens", mint), { recursive: true });
   await appendFile(path.join(DATA_DIR, "tokens", mint, "events.jsonl"), JSON.stringify(event) + "\n");
-  markMintDirty(mint);
+  markMintDirty(mint, state.tokens[mint]?.venue ?? "pumpfun");
 }
 function getAccountKey(key: unknown): string {
   if (typeof key === "string") return key;
@@ -659,7 +659,7 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
 async function handleLiveStonkLaunch(signature: string, logs: Logs, slot: number) {
   if (!STONK_LAUNCH_LOG.test(logs.logs.join("\n")) || state.seenLaunchSignatures.includes(signature)) return;
   const tx = await fetchTransaction(signature);
-  if (!tx) { console.warn("Will recover StonkFun launch transaction only if a later LaunchLab reconciliation is added:", signature); return; }
+  if (!tx) { console.warn("Will recover StonkFun launch transaction during LaunchLab reconciliation:", signature); return; }
   await processStonkLaunch(signature, slot, logs.logs, tx);
 }
 
@@ -857,7 +857,7 @@ async function main() {
   await loadState();
   await auditExistingLaunches();
   const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !INVALID_QUOTE_MINTS.has(item.mint));
-  await restoreTokenEvents(activeTokens.map(item => item.mint));
+  await restoreTokenEvents(activeTokens.map(item => ({ mint: item.mint, venue: item.venue })));
   for (const item of activeTokens) await captureMint(item);
   const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
