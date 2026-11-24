@@ -230,8 +230,6 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     estimatedTotalCurveFeeBps: curve.isHolderReward ? null : 95 + (curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
     feeRateSource: curve.isHolderReward ? "holder_rewards_rate_not_yet_decoded" : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate" : "published_pump_bonding_curve_schedule",
     feeIsEstimateNotExecution: true,
-    creatorFeeAccruedQuote: curve.creatorFeeAccruedRaw == null ? null : Number(curve.creatorFeeAccruedRaw) / quoteDivisor,
-    protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor,
     creatorFeeMayBeOverriddenByHolderRewards: true,
     realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
