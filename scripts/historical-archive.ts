@@ -223,7 +223,16 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
           : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
         for (const launch of launches) {
-          if (state.launches[launch.mint]) continue;
+          const existing = state.launches[launch.mint];
+          if (existing) {
+            const corrected = { ...existing, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool ?? existing.pool };
+            if (corrected.creator !== existing.creator || corrected.feePayer !== existing.feePayer || corrected.quoteMint !== existing.quoteMint || corrected.pool !== existing.pool) {
+              state.launches[launch.mint] = corrected;
+              await writeLaunch(corrected, tx);
+              console.log(`Corrected launch metadata for ${venue} ${launch.mint}`);
+            }
+            continue;
+          }
           const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool };
           state.launches[launch.mint] = record;
           await writeLaunch(record, tx);
