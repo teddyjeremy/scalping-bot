@@ -120,7 +120,7 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
     return page;
   } catch (error) {
     const message = String(error);
-    if (/method not found|not available|not supported|unauthorized|forbidden|\\b401\\b|\\b403\\b/i.test(message)) {
+    if (/method not found|not available|not supported|unauthorized|forbidden|\\b401\\b|\\b402\\b|\\b403\\b|insufficient credits|credit balance|paid plan/i.test(message)) {
       enhancedHistorySupport = false;
       console.warn("Helius getTransactionsForAddress is unavailable for these keys; using standard RPC history fallback.");
       return null;
