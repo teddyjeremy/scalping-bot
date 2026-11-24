@@ -237,7 +237,8 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
     if (enhanced) {
       if (venue === "pumpfun" && pages === 0 && enhanced.data.length === 0) throw new Error("Pump mint-authority history index returned no transactions for the requested historical window.");
-      hydrated = await hydrateHistoryRows(enhanced.data, `Launch index ${venue} page ${pages + 1}`);
+      hydrated = (await hydrateHistoryRows(enhanced.data, `Launch index ${venue} page ${pages + 1}`))
+        .filter(row => row.entry.blockTime != null && row.entry.blockTime >= START && row.entry.blockTime < END);
       progress.paginationToken = enhanced.paginationToken ?? undefined;
       if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
     } else {
@@ -338,6 +339,20 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       for (const { item, tx } of hydrated) {
         if (item.blockTime == null) continue;
         if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${item.signature}; checkpoint remains on this page.`);
+        lines.push(JSON.stringify({
+          schemaVersion: 1, recordType: "historical_transaction_observation",
+          venue: record.venue, mint: record.mint, signature: item.signature,
+          slot: item.slot, blockTime: item.blockTime,
+          secondsSinceLaunch: item.blockTime - record.blockTime, sourceAddress: address,
+          successful: !tx.meta.err, signers: signers(tx),
+          transactionFeeLamports: tx.meta.fee ?? null,
+          computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
+          preBalances: tx.meta.preBalances ?? [], postBalances: tx.meta.postBalances ?? [],
+          preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
+          logMessages: tx.meta.logMessages ?? [],
+          transaction: tx.transaction,
+          metaError: tx.meta.err ?? null
+        }));
         if (tx.meta.err) {
           lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
           continue;
@@ -528,7 +543,15 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
     capture: {
       windowSeconds: CAPTURE_SECONDS,
-      complete: state.tradeCursors?.[record.mint]?.complete === true,
+      transactionHistoryComplete: state.tradeCursors?.[record.mint]?.complete === true,
+      complete: false,
+      researchReady: false,
+      completionBlockers: [
+        "historical_usd_price_unavailable_without_a_verified_historical_price_source",
+        "historical_fdv_and_total_supply_not_verified",
+        "historical_holder_snapshots_not_available_from_standard_transaction_history",
+        "locked_liquidity_state_requires_historical_pool_or_curve_account_evidence"
+      ],
       totalSourcePages: state.tradeCursors?.[record.mint]?.pages ?? names.length,
       sources: Object.fromEntries(Object.entries(state.tradeCursors?.[record.mint]?.sources ?? {}).map(([address, cursor]) => [address, { complete: cursor.complete, pages: cursor.pages }]))
     },
@@ -536,8 +559,14 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
-      historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
-      historicalHolderSnapshots: false, transactionEventAmounts: "decoded program events",
+      historicalUsdPrice: { status: "unavailable", reason: "No verified historical SOL/USD and quote-asset price source is wired into this collector." },
+      historicalFdv: { status: "unavailable", reason: "Requires historical USD price and verified circulating/total supply at the observation time." },
+      historicalTotalSupply: { status: "unavailable", reason: "Launch-transaction touched-account balances are not total supply; no historical mint-account snapshot provider is wired." },
+      historicalHolderSnapshots: { status: "unavailable", reason: "Historical token-account holder enumeration is not provided by standard transaction history." },
+      reserveEvidence: { status: "event_dependent", reason: "Only reserves emitted in decoded program events are retained; absence is not treated as zero or verified state." },
+      liquidityLockStatus: { status: "unavailable", reason: "No historical lock/burn verification adapter is wired for migrated pools." },
+      transactionEventAmounts: "decoded program events",
+      rawTransactionObservations: "full parsed transaction and metadata persisted for every transaction returned by scanned source addresses",
       walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
     }
   };
