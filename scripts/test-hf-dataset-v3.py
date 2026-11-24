@@ -73,6 +73,20 @@ try:
         (trade_dir / page_name).write_text(
             "".join(json.dumps(row) + "\n" for row in trade_rows), encoding="utf-8"
         )
+        checkpoint = {
+            "schemaVersion": 1,
+            "start": launch_time,
+            "end": launch_time + 600,
+            "programs": {},
+            "launches": {
+                mint: {"venue": venue, "mint": mint, "signature": signature,
+                       "slot": 1, "blockTime": launch_time, "creator": None,
+                       "feePayer": None, "quoteMint": "So11111111111111111111111111111111111111112",
+                       "pool": None}
+            },
+            "tradeCursors": {},
+        }
+        (root / "checkpoint.json").write_text(json.dumps(checkpoint) + "\n", encoding="utf-8")
         module.ROOT = root
         module.publish_batch([
             f"launches/{venue}/{shard}/{mint}.json",
@@ -95,7 +109,9 @@ try:
         assert (restored / "launches" / venue / shard / f"{mint}.json").is_file()
         assert (restored / "launches" / venue / shard / f"{mint}.summary.json").is_file()
         assert (restored / "trades" / venue / shard / mint / page_name).is_file()
-        print("PASS: per-coin upload, remote hashes, schema fields, and restart restore verified.")
+        restored_checkpoint = json.loads((restored / "checkpoint.json").read_text(encoding="utf-8"))
+        assert restored_checkpoint["tradeCursors"][mint]["complete"] is True, "COMPLETE ledger was not reconciled into resume cursor"
+        print("PASS: per-coin upload, remote hashes, schema fields, restart restore, and COMPLETE-coin skip cursor verified.")
 finally:
     delete_remote()
     print("Temporary smoke-test coin and ledger cleaned from the dataset.")
