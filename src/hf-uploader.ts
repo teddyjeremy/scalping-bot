@@ -7,11 +7,13 @@ const repoName = process.env.HF_DATASET_REPO ?? "ndeda/solana-scalping-data";
 const dataDir = process.env.DATA_DIR ?? "./data";
 const dirtyMints = new Set<string>();
 let stateDirty = false;
+let qualityDirty = false;
 let flushPromise: Promise<void> | null = null;
 let warnedMissingToken = false;
 
 export function markMintDirty(mint: string) { dirtyMints.add(mint); }
 export function markCollectorStateDirty() { stateDirty = true; }
+export function markQualityManifestDirty() { qualityDirty = true; }
 
 export async function restoreCollectorState(localPath: string) {
   if (!token) return;
@@ -66,14 +68,16 @@ export async function flushHuggingFaceUploads() {
   }
   if (flushPromise) {
     await flushPromise;
-    if (dirtyMints.size > 0 || stateDirty) await flushHuggingFaceUploads();
+    if (dirtyMints.size > 0 || stateDirty || qualityDirty) await flushHuggingFaceUploads();
     return;
   }
-  if (dirtyMints.size === 0 && !stateDirty) return;
+  if (dirtyMints.size === 0 && !stateDirty && !qualityDirty) return;
   const batch = [...dirtyMints];
   const includeState = stateDirty;
+  const includeQuality = qualityDirty;
   for (const mint of batch) dirtyMints.delete(mint);
   if (includeState) stateDirty = false;
+  if (includeQuality) qualityDirty = false;
   let batchFailed = false;
   flushPromise = (async () => {
     try {
@@ -85,22 +89,27 @@ export async function flushHuggingFaceUploads() {
         const state = await readFile(path.join(dataDir, "collector-state.json"));
         files.push({ path: "state/collector-state.json", content: new Blob([state.toString("utf8")], { type: "application/json" }) });
       }
+      if (includeQuality) {
+        const manifest = await readFile(path.join(dataDir, "quality", "data-quality-manifest.json"));
+        files.push({ path: "quality/data-quality-manifest.json", content: new Blob([manifest.toString("utf8")], { type: "application/json" }) });
+      }
       if (files.length === 0) return;
       await uploadFiles({
         repo: { type: "dataset", name: repoName }, accessToken: token, files,
-        commitTitle: `Update collector data (${batch.length} token files${includeState ? " + checkpoint" : ""})`,
+        commitTitle: `Update collector data (${batch.length} token files${includeState ? " + checkpoint" : ""}${includeQuality ? " + quality manifest" : ""})`,
         commitDescription: "Automated resumable research data batch."
       });
-      console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""} to Hugging Face.`);
+      console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""}${includeQuality ? " and data-quality manifest" : ""} to Hugging Face.`);
     } catch (error) {
       batchFailed = true;
       for (const mint of batch) dirtyMints.add(mint);
       if (includeState) stateDirty = true;
+      if (includeQuality) qualityDirty = true;
       console.error("Hugging Face upload failed; batch retained for retry:", String(error).slice(0, 240));
     }
   })();
   await flushPromise;
   flushPromise = null;
-  if (!batchFailed && (dirtyMints.size > 0 || stateDirty)) await flushHuggingFaceUploads();
+  if (!batchFailed && (dirtyMints.size > 0 || stateDirty || qualityDirty)) await flushHuggingFaceUploads();
 }
 setInterval(() => { void flushHuggingFaceUploads(); }, 30_000).unref();
