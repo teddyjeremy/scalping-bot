@@ -34,8 +34,11 @@ export type TradeObservation = {
   cashbackFeeQuote?: number | null;
   buybackFeeQuote?: number | null;
   venueTradeFeeQuote?: number | null;
+  venueTradeFeeBase?: number | null;
   inputTransferFeeQuote?: number | null;
   outputTransferFeeQuote?: number | null;
+  inputTransferFeeBase?: number | null;
+  outputTransferFeeBase?: number | null;
   venueTradeFeeMint?: string | null;
   protocolFeeBps?: number | null;
   lpFeeBps?: number | null;
