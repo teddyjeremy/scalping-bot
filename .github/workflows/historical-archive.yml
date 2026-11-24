@@ -22,7 +22,7 @@ on:
       max_pages:
         description: "Maximum 1000-transaction pages per address per run"
         required: true
-        default: "100"
+        default: "20"
         type: string
 
 concurrency:
@@ -43,8 +43,9 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HISTORY_START: "${{ inputs.start_date || '2026-11-01' }}T00:00:00Z"
       HISTORY_END: "${{ inputs.end_date || '2026-11-24' }}T00:00:00Z"
-      HISTORY_MAX_PAGES_PER_RUN: ${{ inputs.max_pages || '100' }}
+      HISTORY_MAX_PAGES_PER_RUN: ${{ inputs.max_pages || '20' }}
       DATA_DIR: ./historical-data
+      HELIUS_RPC_MIN_INTERVAL_MS: "2000"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
