@@ -1667,18 +1667,76 @@ async function calculateCandidateFdv(item: TokenState): Promise<{ fdvUsd: number
     return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
   }
   if (item.venue === "stonkfun" && item.poolAddress) {
-    const info = await nextRpc().getAccountInfo(new PublicKey(item.poolAddress), "confirmed");
-    if (!info || !info.owner.equals(LAUNCHLAB_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
-    const pool = decodeLaunchLabPoolState(info.data);
-    if (!pool || pool.baseMint !== item.mint || pool.quoteMint !== item.quoteMint || pool.platformConfig !== item.platformConfig) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
-    const quoteMint = pool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);
-    const virtualBase = Number(pool.virtualBaseRaw) / (10 ** pool.baseDecimals);
-    const virtualQuote = Number(pool.virtualQuoteRaw) / (10 ** pool.quoteDecimals);
-    const realBase = Number(pool.realBaseRaw) / (10 ** pool.baseDecimals);
-    const realQuote = Number(pool.realQuoteRaw) / (10 ** pool.quoteDecimals);
-    const priceQuote = virtualBase > 0 ? virtualQuote / virtualBase : null;
-    const fdvUsd = priceQuote != null && quoteUsd != null ? priceQuote * supply * quoteUsd : null;
-    const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: pool.statusName === "funding", realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
+    const launchInfo = await nextRpc().getAccountInfo(new PublicKey(item.poolAddress), "confirmed");
+    if (!launchInfo || !launchInfo.owner.equals(LAUNCHLAB_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+    const launchPool = decodeLaunchLabPoolState(launchInfo.data);
+    if (!launchPool || launchPool.baseMint !== item.mint || launchPool.quoteMint !== item.quoteMint || launchPool.platformConfig !== item.platformConfig) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+    const quoteMint = launchPool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);
+    if (launchPool.statusName === "funding") {
+      const virtualBase = Number(launchPool.virtualBaseRaw) / (10 ** launchPool.baseDecimals);
+      const virtualQuote = Number(launchPool.virtualQuoteRaw) / (10 ** launchPool.quoteDecimals);
+      const realBase = Number(launchPool.realBaseRaw) / (10 ** launchPool.baseDecimals);
+      const realQuote = Number(launchPool.realQuoteRaw) / (10 ** launchPool.quoteDecimals);
+      const priceQuote = virtualBase > 0 ? virtualQuote / virtualBase : null;
+      const fdvUsd = priceQuote != null && quoteUsd != null ? priceQuote * supply * quoteUsd : null;
+      const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: true, realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
+      return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
+    }
+    // A migrated LaunchLab pool is not treated as locked merely because it is trading.
+    // Recover the protocol migration instruction, then verify the CPMM LP mint and lock vault.
+    if (launchPool.statusName !== "trading") return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    if (!item.cpmmPoolAddress || !item.lpLockVaultAddress) {
+      const signatures = await nextRpc().getSignaturesForAddress(new PublicKey(item.poolAddress), { limit: 100 }, "confirmed");
+      for (const signature of signatures) {
+        const tx = await fetchTransaction(signature.signature);
+        if (!tx || tx.meta?.err) continue;
+        const migration = findLaunchLabCpmmMigration(allTransactionInstructions(tx), item.mint);
+        if (migration) {
+          item.cpmmPoolAddress = migration.pool;
+          item.lpLockVaultAddress = migration.lockLpVault;
+          item.quoteMint = migration.quoteMint;
+          break;
+        }
+      }
+      await persistState();
+    }
+    if (!item.cpmmPoolAddress || !item.lpLockVaultAddress) return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    const cpmmInfo = await nextRpc().getAccountInfo(new PublicKey(item.cpmmPoolAddress), "confirmed");
+    if (!cpmmInfo || !cpmmInfo.owner.equals(new PublicKey(RAYDIUM_CPMM_PROGRAM))) return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    const cpmm = decodeRaydiumCpmmPoolState(cpmmInfo.data);
+    if (!cpmm || (cpmm.token0Mint !== item.mint && cpmm.token1Mint !== item.mint)) return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    const baseIsToken0 = cpmm.token0Mint === item.mint;
+    const baseVault = baseIsToken0 ? cpmm.token0Vault : cpmm.token1Vault;
+    const quoteVault = baseIsToken0 ? cpmm.token1Vault : cpmm.token0Vault;
+    const verifiedQuoteMint = baseIsToken0 ? cpmm.token1Mint : cpmm.token0Mint;
+    const baseDecimals = baseIsToken0 ? cpmm.token0Decimals : cpmm.token1Decimals;
+    const quoteDecimals = baseIsToken0 ? cpmm.token1Decimals : cpmm.token0Decimals;
+    if (verifiedQuoteMint !== quoteMint) return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    const [baseVaultInfo, quoteVaultInfo, lpMintInfo, lockInfo, lpSupplyInfo] = await Promise.all([
+      nextRpc().getAccountInfo(new PublicKey(baseVault), "confirmed"),
+      nextRpc().getAccountInfo(new PublicKey(quoteVault), "confirmed"),
+      nextRpc().getAccountInfo(new PublicKey(cpmm.lpMint), "confirmed"),
+      nextRpc().getAccountInfo(new PublicKey(item.lpLockVaultAddress), "confirmed"),
+      nextRpc().getTokenSupply(new PublicKey(cpmm.lpMint), "confirmed")
+    ]);
+    const baseRaw = baseVaultInfo ? decodeTokenAccountAmount(baseVaultInfo.data, item.mint) : null;
+    const quoteRaw = quoteVaultInfo ? decodeTokenAccountAmount(quoteVaultInfo.data, quoteMint) : null;
+    const lockedRaw = lockInfo && TOKEN_PROGRAMS.has(lockInfo.owner.toBase58()) ? decodeTokenAccountAmount(lockInfo.data, cpmm.lpMint) : null;
+    const lockAuthority = lockInfo && lockInfo.data.length >= 64 ? new PublicKey(lockInfo.data.subarray(32, 64)) : null;
+    const lpMintVerified = Boolean(lpMintInfo && TOKEN_PROGRAMS.has(lpMintInfo.owner.toBase58()));
+    const lpSupply = Number(lpSupplyInfo.value.uiAmountString ?? lpSupplyInfo.value.uiAmount ?? 0);
+    const lockedLpAmount = lockedRaw == null ? 0 : Number(lockedRaw) / (10 ** lpSupplyInfo.value.decimals);
+    const lockAuthorityVerified = Boolean(lockInfo && lockedRaw != null && lockAuthority && !PublicKey.isOnCurve(lockAuthority.toBytes()));
+    const lockVaultTokenAccountVerified = Boolean(lockInfo && TOKEN_PROGRAMS.has(lockInfo.owner.toBase58()) && lockedRaw != null);
+    const liquidity: LiquidityEvidence = {
+      kind: "locked_lp", poolOwnerVerified: true, lpMintVerified, lockVaultTokenAccountVerified,
+      lockAuthorityVerified, lockedLpAmount, lpSupply, minimumLockedSharePct: Number(process.env.MIN_LOCKED_LP_SHARE_PCT ?? 90)
+    };
+    if (baseRaw == null || quoteRaw == null || baseRaw <= 0n || quoteUsd == null) return { fdvUsd: null, liquidity, quoteMint, priceQuote: null, quoteUsd };
+    const baseAmount = Number(baseRaw) / (10 ** baseDecimals);
+    const quoteAmount = Number(quoteRaw) / (10 ** quoteDecimals);
+    const priceQuote = quoteAmount / baseAmount;
+    const fdvUsd = Number.isFinite(priceQuote) && priceQuote > 0 ? priceQuote * supply * quoteUsd : null;
     return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
   }
   return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
