@@ -120,7 +120,7 @@ const RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 export function findLaunchLabCpmmMigration(
   instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
   mint: string
-): { pool: string; quoteMint: string } | null {
+): { pool: string; quoteMint: string; lockLpVault: string | null } | null {
   for (const instruction of instructions) {
     if (String(instruction.programId ?? "") !== "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj") continue;
     if (typeof instruction.data !== "string" || !Array.isArray(instruction.accounts) || instruction.accounts.length < 6) continue;
@@ -128,11 +128,12 @@ export function findLaunchLabCpmmMigration(
     try { bytes = decodeBase58(instruction.data); } catch { continue; }
     if (bytes.length < 8) continue;
     const discriminator = [...bytes.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("");
-    if (discriminator !== LAUNCHLAB_MIGRATE_TO_CPSWAP) continue;
+    if (discriminator !== LAUNCHLAB_MIGRATE_TO_CPSWAP || instruction.accounts.length < 16) continue;
     const baseMint = String(instruction.accounts[1] ?? "");
     const quoteMint = String(instruction.accounts[2] ?? "");
     const pool = String(instruction.accounts[5] ?? "");
-    if (baseMint === mint && quoteMint && pool) return { pool, quoteMint };
+    const lockLpVault = String(instruction.accounts[15] ?? "");
+    if (baseMint === mint && quoteMint && pool) return { pool, quoteMint, lockLpVault: lockLpVault || null };
   }
   return null;
 }
@@ -147,6 +148,7 @@ export type RaydiumCpmmPoolState = {
   token0Decimals: number;
   token1Decimals: number;
   lpSupplyRaw: bigint;
+  lpMintDecimals: number;
   protocolFeesToken0Raw: bigint;
   protocolFeesToken1Raw: bigint;
   fundFeesToken0Raw: bigint;
@@ -172,6 +174,7 @@ export function decodeRaydiumCpmmPoolState(data: Buffer): RaydiumCpmmPoolState |
     token0Decimals: data[331],
     token1Decimals: data[332],
     lpSupplyRaw: data.readBigUInt64LE(333),
+    lpMintDecimals: data[330],
     protocolFeesToken0Raw: data.readBigUInt64LE(341),
     protocolFeesToken1Raw: data.readBigUInt64LE(349),
     fundFeesToken0Raw: data.readBigUInt64LE(357),
