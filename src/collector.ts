@@ -4,6 +4,7 @@ import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
+import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -15,7 +16,7 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const INVALID_QUOTE_MINTS = new Set([WRAPPED_SOL_MINT, USDC_MINT, USDT_MINT]);
-const CREATE_LOG = /Program log: Instruction: Create(?:V2)?/i;
+const CREATE_LOG = /Program log: Instruction: Create(?:V2)?\s*$/im;
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
 const CAPTURE_MS = Number(process.env.CAPTURE_MINUTES ?? 10) * 60_000;
 const RUN_FOR_MS = Number(process.env.RUN_FOR_MINUTES ?? 0) * 60_000;
@@ -53,6 +54,7 @@ type TokenMetrics = {
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string;
+  launchVerified?: boolean; launchInstruction?: "create" | "create_v2";
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
   metrics?: TokenMetrics;
@@ -341,20 +343,17 @@ function getAccountKey(key: unknown): string {
   if (key && typeof key === "object" && "pubkey" in key) return String((key as { pubkey: unknown }).pubkey);
   return String(key);
 }
+function pumpCreateInstructions(tx: ParsedTransactionWithMeta) {
+  return findPumpCreateInstructions(
+    tx.transaction.message.instructions as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
+    PUMP_PROGRAM.toBase58()
+  );
+}
 function isCreateTransaction(tx: ParsedTransactionWithMeta): boolean {
-  return (tx.meta?.logMessages ?? []).some(line => CREATE_LOG.test(line));
+  return pumpCreateInstructions(tx).length > 0;
 }
 function createdPumpMints(tx: ParsedTransactionWithMeta): string[] {
-  const found = new Set<string>();
-  // The official Pump IDL defines the first account of both create and create_v2 as the new mint.
-  for (const instruction of tx.transaction.message.instructions) {
-    if (!("accounts" in instruction)) continue;
-    const programId = "programId" in instruction ? String(instruction.programId) : "";
-    if (programId !== PUMP_PROGRAM.toBase58()) continue;
-    const mint = instruction.accounts[0] ? getAccountKey(instruction.accounts[0]) : "";
-    if (mint && !INVALID_QUOTE_MINTS.has(mint)) found.add(mint);
-  }
-  return [...found];
+  return [...new Set(pumpCreateInstructions(tx).map(instruction => instruction.mint).filter(mint => mint && !INVALID_QUOTE_MINTS.has(mint)))];
 }
 async function isMintAccount(mint: string): Promise<boolean> {
   try {
@@ -362,19 +361,41 @@ async function isMintAccount(mint: string): Promise<boolean> {
     return Boolean(info && TOKEN_PROGRAMS.has(info.owner.toBase58()));
   } catch { return false; }
 }
-async function fetchTransaction(signature: string): Promise<ParsedTransactionWithMeta | null> {
+let transactionFetchTail: Promise<void> = Promise.resolve();
+const transactionFetches = new Map<string, Promise<ParsedTransactionWithMeta | null>>();
+let lastTransactionRequestAt = 0;
+const TRANSACTION_REQUEST_INTERVAL_MS = Math.max(250, Number(process.env.HELIUS_TX_MIN_INTERVAL_MS ?? 350));
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchTransactionWithBackoff(signature: string): Promise<ParsedTransactionWithMeta | null> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < Math.max(rpc.length, 3); attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const wait = Math.max(0, lastTransactionRequestAt + TRANSACTION_REQUEST_INTERVAL_MS - Date.now());
+    if (wait) await sleep(wait);
+    lastTransactionRequestAt = Date.now();
     try {
       const tx = await nextRpc().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as never });
       if (tx) return tx;
+      lastError = new Error("RPC returned a null transaction");
+      if (attempt < 2) await sleep(500 * (attempt + 1));
     } catch (error) {
       lastError = error;
-      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+      const rateLimited = /429|too many requests|rate.?limit/i.test(String(error));
+      const delay = rateLimited ? Math.min(15_000, 1_000 * (2 ** attempt)) : Math.min(5_000, 400 * (attempt + 1));
+      await sleep(delay);
     }
   }
-  if (lastError) console.error("Transaction fetch failed:", String(lastError).slice(0, 180));
+  console.error("Transaction fetch exhausted retries; signature remains recoverable:", signature, String(lastError).slice(0, 180));
   return null;
+}
+function fetchTransaction(signature: string): Promise<ParsedTransactionWithMeta | null> {
+  const existing = transactionFetches.get(signature);
+  if (existing) return existing;
+  const request = transactionFetchTail.then(() => fetchTransactionWithBackoff(signature));
+  transactionFetchTail = request.then(() => undefined, () => undefined);
+  transactionFetches.set(signature, request);
+  void request.finally(() => transactionFetches.delete(signature));
+  return request;
 }
 async function captureMint(item: TokenState) {
   const { mint, expiresAt } = item;
@@ -453,8 +474,10 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       supplyUi = supply.value.uiAmount;
       supplyDecimals = supply.value.decimals;
     } catch (error) { console.warn("Could not read token supply for", mint, String(error).slice(0, 120)); }
+    const createInstruction = pumpCreateInstructions(tx).find(instruction => instruction.mint === mint);
+    if (!createInstruction) continue;
     const item: TokenState = {
-      mint, creator: null, launchSignature: signature, firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
+      mint, creator: null, launchSignature: signature, launchVerified: true, launchInstruction: createInstruction.kind, firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
       supplyUi, supplyDecimals
     };
     ensureMetrics(item);
@@ -464,7 +487,7 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       creator: null, creatorEvidence: "not decoded; fee payer is stored separately",
       totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
       launchSignature: signature, launchSlot: slot, firstSeenAt,
-      program: PUMP_PROGRAM.toBase58(), instruction: "create_or_create_v2", launchLogs: logs
+      program: PUMP_PROGRAM.toBase58(), instruction: createInstruction.kind, launchVerification: "IDL discriminator + mint account owner", launchLogs: logs
     });
     await persistState();
     await captureMint(item);
