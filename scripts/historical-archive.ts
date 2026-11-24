@@ -500,7 +500,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         ["outputTransfer", event.outputTransferFeeRaw, event.quoteMint]
       ];
       for (const [feeName, rawFee, feeMint] of feeFields) {
-        if (typeof rawFee !== "string" || !feeMint || !/^\\d+$/.test(rawFee)) continue;
+        if (typeof rawFee !== "string" || !feeMint || !/^\d+$/.test(rawFee)) continue;
         const mint = String(feeMint);
         const totals = feeTotalsByMint.get(mint) ?? new Map<string, bigint>();
         totals.set(feeName, (totals.get(feeName) ?? 0n) + BigInt(rawFee));
