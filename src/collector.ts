@@ -606,6 +606,60 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
   if (state.seenLaunchSignatures.length > 20_000) state.seenLaunchSignatures = state.seenLaunchSignatures.slice(-10_000);
   await persistState();
 }
+async function processStonkLaunch(signature: string, slot: number, logs: string[], tx: ParsedTransactionWithMeta) {
+  if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err) return;
+  const launches = stonkFunLaunchInstructions(tx);
+  for (const launch of launches) {
+    const { mint, quoteMint, pool, platformConfig, kind } = launch;
+    if (state.tokens[mint] || !await isMintAccount(mint)) continue;
+    const feePayer = getAccountKey(tx.transaction.message.accountKeys[0]);
+    const creator = getAccountKey(tx.transaction.message.accountKeys[1]);
+    const firstSeenAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
+    let supplyUi: number | null = null;
+    let supplyDecimals: number | null = null;
+    try {
+      const supply = await nextRpc().getTokenSupply(new PublicKey(mint), "confirmed");
+      supplyUi = supply.value.uiAmount;
+      supplyDecimals = supply.value.decimals;
+    } catch (error) { console.warn("Could not read StonkFun token supply:", mint, String(error).slice(0, 120)); }
+    const quoteDecimals = await getMintDecimals(quoteMint);
+    const quoteSymbol = quoteMint === WRAPPED_SOL_MINT ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+    const item: TokenState = {
+      mint, creator, launchSignature: signature, launchVerified: true, launchInstruction: kind,
+      venue: "stonkfun", quoteMint, poolAddress: pool, platformConfig,
+      firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS, supplyUi, supplyDecimals
+    };
+    const metrics = ensureMetrics(item);
+    metrics.quoteMint = quoteMint;
+    metrics.quoteSymbol = quoteSymbol;
+    metrics.quoteDecimals = quoteDecimals;
+    metrics.priceSource = "owner_balance_delta_estimate";
+    state.tokens[mint] = item;
+    await appendTokenEvent(mint, {
+      schemaVersion: 2, kind: "launch_detected", venue: "stonkfun", mint, creator, feePayer,
+      launchSignature: signature, launchSlot: slot, firstSeenAt, instruction: kind,
+      program: LAUNCHLAB_PROGRAM.toBase58(), platformConfig, poolAddress: pool,
+      quoteMint, quoteSymbol, quoteDecimals,
+      totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
+      launchVerification: "LaunchLab initializer discriminator + verified StonkFun platform config + token-mint owner",
+      launchLogs: logs
+    });
+    await persistState();
+    await captureMint(item);
+    console.log("Verified StonkFun LaunchLab capture started:", mint, "quote:", quoteMint);
+  }
+  state.seenLaunchSignatures.push(signature);
+  if (state.seenLaunchSignatures.length > 20_000) state.seenLaunchSignatures = state.seenLaunchSignatures.slice(-10_000);
+  await persistState();
+}
+
+async function handleLiveStonkLaunch(signature: string, logs: Logs, slot: number) {
+  if (!STONK_LAUNCH_LOG.test(logs.logs.join("\n")) || state.seenLaunchSignatures.includes(signature)) return;
+  const tx = await fetchTransaction(signature);
+  if (!tx) { console.warn("Will recover StonkFun launch transaction only if a later LaunchLab reconciliation is added:", signature); return; }
+  await processStonkLaunch(signature, slot, logs.logs, tx);
+}
+
 async function handleLiveLaunch(signature: string, logs: Logs, slot: number) {
   if (!CREATE_LOG.test(logs.logs.join("\n")) || state.seenLaunchSignatures.includes(signature)) return;
   const tx = await fetchTransaction(signature);
