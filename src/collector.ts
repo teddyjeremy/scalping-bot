@@ -124,6 +124,9 @@ type PumpCurveState = {
   creator: string | null; quoteMint: string | null; complete: boolean;
   virtualTokenRaw: bigint; virtualSolLamports: bigint;
   realTokenRaw: bigint; realSolLamports: bigint; totalSupplyRaw: bigint;
+  creatorFeeBps: bigint | null; isHolderReward: boolean | null;
+  creatorFeeAccruedRaw: bigint | null; protocolFeesAccruedRaw: bigint | null;
+  isMayhemMode: boolean | null; isCashbackCoin: boolean | null;
 };
 function decodePumpCurve(data: Buffer): PumpCurveState | null {
   // Anchor account: discriminator + five u64 reserves/supply + bool + creator.
@@ -140,7 +143,13 @@ function decodePumpCurve(data: Buffer): PumpCurveState | null {
     realTokenRaw: data.readBigUInt64LE(24),
     realSolLamports: data.readBigUInt64LE(32),
     totalSupplyRaw: data.readBigUInt64LE(40),
-    complete: data[48] === 1
+    complete: data[48] === 1,
+    isMayhemMode: data.length >= 82 ? data[81] === 1 : null,
+    isCashbackCoin: data.length >= 83 ? data[82] === 1 : null,
+    creatorFeeBps: data.length >= 123 ? data.readBigUInt64LE(115) : null,
+    isHolderReward: data.length >= 125 ? data[124] === 1 : null,
+    creatorFeeAccruedRaw: data.length >= 133 ? data.readBigUInt64LE(125) : null,
+    protocolFeesAccruedRaw: data.length >= 141 ? data.readBigUInt64LE(133) : null
   };
 }
 async function processCurveState(item: TokenState, data: Buffer, slot: number) {
@@ -200,6 +209,13 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   await appendTokenEvent(item.mint, {
     schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, observedAt: Date.now(),
     creator: curve.creator, quoteMint, quoteSymbol, quoteDecimals, complete: curve.complete,
+    isMayhemMode: curve.isMayhemMode, isCashbackCoin: curve.isCashbackCoin,
+    isHolderReward: curve.isHolderReward,
+    creatorFeeBps: curve.creatorFeeBps?.toString() ?? null,
+    creatorFeeAccruedRaw: curve.creatorFeeAccruedRaw?.toString() ?? null,
+    protocolFeesAccruedRaw: curve.protocolFeesAccruedRaw?.toString() ?? null,
+    creatorFeeAccruedQuote: curve.creatorFeeAccruedRaw == null ? null : Number(curve.creatorFeeAccruedRaw) / quoteDivisor,
+    protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor
     virtualTokenReservesRaw: curve.virtualTokenRaw.toString(), virtualQuoteReservesRaw: curve.virtualSolLamports.toString(),
     realTokenReservesRaw: curve.realTokenRaw.toString(), realQuoteReservesRaw: curve.realSolLamports.toString(),
     virtualQuoteReserves: virtualQuote, realQuoteReserves: realQuote,
@@ -208,8 +224,13 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     marketCapUsd: marketCap(priceUsd, supply), pricingMethod: "pump_bonding_curve_virtual_reserves",
     // Published bonding-curve schedule: 0.95% protocol + 0.30% creator = 1.25%.
     // Custom-pair Holder Rewards can override the creator component; exact event values take precedence.
-    estimatedProtocolFeeBps: 95, estimatedCreatorFeeBps: 30, estimatedTotalCurveFeeBps: 125,
-    feeRateSource: "published_pump_bonding_curve_schedule", feeIsEstimateNotExecution: true,
+    estimatedProtocolFeeBps: 95,
+    estimatedCreatorFeeBps: curve.creatorFeeBps == null ? 30 : Number(curve.creatorFeeBps),
+    estimatedTotalCurveFeeBps: 95 + (curve.creatorFeeBps == null ? 30 : Number(curve.creatorFeeBps)),
+    feeRateSource: curve.creatorFeeBps == null ? "published_pump_bonding_curve_schedule" : "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate",
+    feeIsEstimateNotExecution: true,
+    creatorFeeAccruedQuote: curve.creatorFeeAccruedRaw == null ? null : Number(curve.creatorFeeAccruedRaw) / quoteDivisor,
+    protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor,
     creatorFeeMayBeOverriddenByHolderRewards: true,
     realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
