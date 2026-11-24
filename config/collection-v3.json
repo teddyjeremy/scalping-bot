@@ -1,6 +1,6 @@
 {
   "schema_version": "3.0.0",
-  "status": "free_tier_compatible_collector_validation_required",
+  "status": "free_tier_standard_rpc_preflight_passed_historical_coverage_unverified",
   "collection_window": {
     "start_utc": "2026-11-01T00:00:00Z",
     "end_utc_exclusive": "2026-11-24T00:00:00Z"
@@ -94,5 +94,23 @@
       "concurrent_transaction_hydration_workers": 3,
       "rotate_keys_on_rate_limit": true
     }
+  },
+  "validation": {
+    "standard_rpc_preflight": "passed",
+    "verified_methods": [
+      "getVersion",
+      "getSlot",
+      "getSignaturesForAddress",
+      "getTransaction"
+    ],
+    "verified_addresses": [
+      "Pump.fun mint-authority history",
+      "Raydium LaunchLab program history"
+    ],
+    "pagination": "two consecutive pages checked per address with no cursor overlap",
+    "transaction_hydration": "sample transaction metadata verified for each address",
+    "all_three_keys": "authenticated against the same Solana cluster",
+    "historical_window_coverage": "not_verified",
+    "full_backfill_started": false
   }
 }
