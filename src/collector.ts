@@ -122,6 +122,8 @@ type TokenState = {
   venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; cpmmPoolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
+  mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null;
+  tokenProgramOwner?: string | null; tokenExtensions?: Array<{ extension: string; state?: unknown }> | null;
   metrics?: TokenMetrics;
 };
 type CollectorState = {
@@ -1321,6 +1323,33 @@ async function stopCapture(mint: string) {
     activeSubscriptions.delete(mint);
   }
 }
+async function fetchMintRiskMetadata(mint: string): Promise<{
+  mintAuthority: string | null; freezeAuthority: string | null; mintInitialized: boolean | null;
+  tokenProgramOwner: string | null; tokenExtensions: Array<{ extension: string; state?: unknown }> | null;
+}> {
+  try {
+    const response = await nextRpc().getParsedAccountInfo(new PublicKey(mint), "confirmed");
+    if (!response.value) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: null, tokenExtensions: null };
+    const accountData = response.value.data as unknown as { parsed?: { info?: Record<string, unknown> } };
+    const info = accountData.parsed?.info;
+    if (!info) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: response.value.owner.toBase58(), tokenExtensions: null };
+    const rawExtensions = Array.isArray(info.extensions) ? info.extensions : null;
+    const tokenExtensions = rawExtensions?.map(value => {
+      const extension = value as Record<string, unknown>;
+      return { extension: String(extension.extension ?? extension.type ?? "unknown"), state: extension.state ?? extension };
+    }) ?? null;
+    return {
+      mintAuthority: info.mintAuthority ? String(info.mintAuthority) : null,
+      freezeAuthority: info.freezeAuthority ? String(info.freezeAuthority) : null,
+      mintInitialized: typeof info.isInitialized === "boolean" ? info.isInitialized : null,
+      tokenProgramOwner: response.value.owner.toBase58(),
+      tokenExtensions
+    };
+  } catch (error) {
+    console.warn("Could not read mint authority/extensions:", mint, String(error).slice(0, 120));
+    return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: null, tokenExtensions: null };
+  }
+}
 async function processLaunch(signature: string, slot: number, logs: string[], tx: ParsedTransactionWithMeta) {
   if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err || !isCreateTransaction(tx)) return;
   const mints = createdPumpMints(tx);
@@ -1337,8 +1366,9 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
     } catch (error) { console.warn("Could not read token supply for", mint, String(error).slice(0, 120)); }
     const createInstruction = pumpCreateInstructions(tx).find(instruction => instruction.mint === mint);
     if (!createInstruction) continue;
+    const mintRisk = await fetchMintRiskMetadata(mint);
     const item: TokenState = {
-      mint, creator: null, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
+      mint, ...mintRisk, creator: null, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
       supplyUi, supplyDecimals
     };
     ensureMetrics(item);
@@ -1347,6 +1377,8 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       schemaVersion: 2, kind: "launch_detected", mint, feePayer,
       creator: null, creatorEvidence: "not decoded; fee payer is stored separately",
       totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
+      ...mintRisk, mintAuthorityRenounced: mintRisk.mintAuthority == null,
+      freezeAuthorityRenounced: mintRisk.freezeAuthority == null,
       launchSignature: signature, launchSlot: slot, firstSeenAt,
       program: PUMP_PROGRAM.toBase58(), instruction: createInstruction.kind, launchVerification: "IDL discriminator + mint account owner", launchLogs: logs
     });
@@ -1376,8 +1408,9 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
     } catch (error) { console.warn("Could not read StonkFun token supply:", mint, String(error).slice(0, 120)); }
     const quoteDecimals = await getMintDecimals(quoteMint);
     const quoteSymbol = quoteMint === WRAPPED_SOL_MINT ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+    const mintRisk = await fetchMintRiskMetadata(mint);
     const item: TokenState = {
-      mint, creator, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: kind,
+      mint, ...mintRisk, creator, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: kind,
       venue: "stonkfun", quoteMint, poolAddress: pool, platformConfig,
       firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS, supplyUi, supplyDecimals
     };
@@ -1395,6 +1428,8 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
       program: LAUNCHLAB_PROGRAM.toBase58(), platformConfig, poolAddress: pool,
       quoteMint, quoteSymbol, quoteDecimals,
       totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
+      ...mintRisk, mintAuthorityRenounced: mintRisk.mintAuthority == null,
+      freezeAuthorityRenounced: mintRisk.freezeAuthority == null,
       launchVerification: "LaunchLab initializer discriminator + verified StonkFun platform config + token-mint owner",
       launchLogs: logs
     });
