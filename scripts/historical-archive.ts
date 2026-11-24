@@ -436,6 +436,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   let sellEvents = 0;
   let transactionObservations = 0;
   const observedTransactions = new Set<string>();
+  const coverageBuckets = new Map<number, number>();
+  const observedOffsets: number[] = [];
   let missingDecimalEvents = 0;
   let duplicateEvents = 0;
   for (const name of names) {
@@ -449,6 +451,12 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       if (event.recordType === "historical_transaction_observation") {
         transactionObservations++;
         if (signature) observedTransactions.add(signature);
+        const offset = Number(event.secondsSinceLaunch);
+        if (Number.isFinite(offset) && offset >= 0 && offset <= CAPTURE_SECONDS) {
+          observedOffsets.push(offset);
+          const bucket = Math.min(Math.floor(offset / 10), 59);
+          coverageBuckets.set(bucket, (coverageBuckets.get(bucket) ?? 0) + 1);
+        }
         continue;
       }
       if (event.recordType === "historical_failed_transaction") {
@@ -551,6 +559,17 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
     capture: {
       windowSeconds: CAPTURE_SECONDS,
+      timeCoverage: {
+        bucketSeconds: 10,
+        bucketCount: 60,
+        observedTransactionCount: observedTransactions.size,
+        observedBuckets: [...coverageBuckets.keys()].sort((a, b) => a - b),
+        emptyBuckets: Array.from({ length: 60 }, (_, index) => index).filter(index => !coverageBuckets.has(index)),
+        earliestObservedSecondsAfterLaunch: observedOffsets.length ? Math.min(...observedOffsets) : null,
+        latestObservedSecondsAfterLaunch: observedOffsets.length ? Math.max(...observedOffsets) : null,
+        gapAccountingComplete: state.tradeCursors?.[record.mint]?.complete === true,
+        bucketInterpretation: "A zero-count bucket means no transaction was returned for the scanned mint, curve, or discovered pool addresses; it is not proof that no off-address activity occurred."
+      },
       transactionHistoryComplete: state.tradeCursors?.[record.mint]?.complete === true,
       complete: false,
       researchReady: false,
