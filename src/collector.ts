@@ -402,6 +402,53 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   await persistState();
 }
 
+async function retryPendingActivityTransactions() {
+  if (retryingPendingActivity || shuttingDown) return;
+  retryingPendingActivity = true;
+  let changed = false;
+  try {
+    state.pendingActivity ??= {};
+    for (const [mint, pending] of Object.entries(state.pendingActivity)) {
+      const item = state.tokens[mint];
+      if (!item) {
+        delete state.pendingActivity[mint];
+        changed = true;
+        continue;
+      }
+      for (const entry of [...pending]) {
+        const tx = await fetchTransaction(entry.signature);
+        if (!tx) continue;
+        if (!(item.quoteMint ?? item.metrics?.quoteMint)) continue;
+        await processTradeMetrics(item, tx, entry.signature, entry.slot);
+        await appendTokenEvent(mint, {
+          schemaVersion: 2, kind: "token_activity_enriched", mint, observedAt: entry.observedAt,
+          slot: entry.slot, signature: entry.signature, logs: entry.logs,
+          transaction: {
+            blockTime: tx.blockTime, feeLamports: tx.meta?.fee,
+            signatureCount: tx.transaction.signatures.length,
+            baseSignatureFeeLamports: tx.transaction.signatures.length * 5_000,
+            estimatedPriorityFeeLamports: Math.max(0, (tx.meta?.fee ?? 0) - tx.transaction.signatures.length * 5_000),
+            computeUnitsConsumed: tx.meta?.computeUnitsConsumed, loadedAddresses: tx.meta?.loadedAddresses,
+            err: tx.meta?.err, accountKeys: tx.transaction.message.accountKeys.map(k => getAccountKey(k)),
+            preBalances: tx.meta?.preBalances, postBalances: tx.meta?.postBalances,
+            preTokenBalances: tx.meta?.preTokenBalances, postTokenBalances: tx.meta?.postTokenBalances,
+            innerInstructions: tx.meta?.innerInstructions, logMessages: tx.meta?.logMessages
+          }
+        });
+        const index = pending.findIndex(candidate => candidate.signature === entry.signature);
+        if (index >= 0) pending.splice(index, 1);
+        changed = true;
+      }
+      if (pending.length === 0) delete state.pendingActivity[mint];
+    }
+    if (changed) await persistState();
+  } catch (error) {
+    console.error("Pending activity enrichment paused; signatures remain checkpointed:", String(error).slice(0, 200));
+  } finally {
+    retryingPendingActivity = false;
+  }
+}
+
 async function migrateQuarantinedMint(mint: string) {
   const entry = qualityManifest.quarantinedMints[mint];
   if (!entry || entry.rawMovedToQuarantine === true) return;
