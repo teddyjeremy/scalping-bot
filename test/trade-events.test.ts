@@ -71,3 +71,42 @@ test("decodes PumpSwap buy and sell events with user quote amounts", () => {
   assert.equal(result[1].side, "sell");
   assert.equal(result[1].quoteAmountRaw, 3_950_000_000n);
 });
+
+test("decodes StonkFun LaunchLab trade events using matching swap instruction accounts", () => {
+  chunks.length = 0;
+  chunks.push(Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]));
+  pubkey(1);
+  for (let i = 1; i <= 7; i++) u64(i);
+  u64(1_000_000_000n); u64(100_000_000n);
+  u64(10_000n); u64(20_000n); u64(30_000n); u64(40_000n);
+  u8(0); u8(0); u8(1);
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const encode58 = (bytes: Uint8Array) => {
+    let value = 0n; for (const byte of bytes) value = (value << 8n) + BigInt(byte);
+    let out = ""; while (value > 0n) { const d = Number(value % 58n); out = alphabet[d] + out; value /= 58n; }
+    return out;
+  };
+  const instructionData = encode58(Uint8Array.from([250, 234, 13, 123, 213, 156, 19, 236]));
+  const mint = key(9), quoteMint = key(10), pool = key(1), user = key(8);
+  const program = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
+  const instructions = [{
+    programId: program, data: instructionData,
+    accounts: [user, key(2), key(3), key(4), pool, key(5), key(6), key(7), key(8), mint, quoteMint]
+  }];
+  const result = decodeProgramTradeEvents([
+    "Program " + program + " invoke [1]",
+    "Program data: " + data().toString("base64"),
+    "Program " + program + " success"
+  ], mint, instructions);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].venue, "stonkfun");
+  assert.equal(result[0].side, "buy");
+  assert.equal(result[0].user, user);
+  assert.equal(result[0].quoteMint, quoteMint);
+  assert.equal(result[0].quoteAmountRaw, 1_000_000_000n);
+  assert.equal(result[0].tokenAmountRaw, 100_000_000n);
+  assert.equal(result[0].protocolFeeRaw, 10_000n);
+  assert.equal(result[0].platformFeeRaw, 20_000n);
+  assert.equal(result[0].creatorFeeRaw, 30_000n);
+  assert.equal(result[0].shareFeeRaw, 40_000n);
+});
