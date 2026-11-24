@@ -3,3 +3,4 @@ Corrected archive resume: refresh summaries after every raw page, stable source 
 Final corrected pass: incremental RPC hydration logs, page-level summary refresh, stable source IDs, completeness audit, and Parquet tables.
 
 Parquet export now deduplicates trade events and failed transactions across mint/curve/pool sources before consistency checks.
+Sharded archive upload retry 2026-11-24T16:00Z
