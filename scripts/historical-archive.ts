@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
@@ -138,6 +139,22 @@ const launchRecordPath = (record: { venue: string; mint: string }, suffix = ".js
 const tradeRecordDirectory = (record: { venue: string; mint: string }) => path.join(ROOT, "trades", record.venue, mintShard(record.mint), record.mint);
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 let saveQueue: Promise<void> = Promise.resolve();
+let uploadQueue: Promise<void> = Promise.resolve();
+const dirtyFiles = new Set<string>();
+function queueDirtyFile(file: string) { dirtyFiles.add(path.relative(process.cwd(), file).replaceAll(path.sep, "/")); }
+async function uploadDirtyFiles() {
+  const run = uploadQueue.then(async () => {
+    const files = [...dirtyFiles];
+    if (files.length) {
+      execFileSync("python", ["scripts/hf-dataset-sync.py", "upload-batch", ...files], { stdio: "inherit" });
+      for (const file of files) dirtyFiles.delete(file);
+    } else {
+      execFileSync("python", ["scripts/hf-dataset-sync.py", "upload-checkpoint"], { stdio: "inherit" });
+    }
+  });
+  uploadQueue = run.catch(() => undefined);
+  await run;
+}
 async function save() {
   const write = saveQueue.then(async () => {
     await mkdir(ROOT, { recursive: true });
