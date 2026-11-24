@@ -5,13 +5,13 @@ import path from "node:path";
 const token = process.env.HF_TOKEN;
 const repoName = process.env.HF_DATASET_REPO ?? "ndeda/solana-scalping-data";
 const dataDir = process.env.DATA_DIR ?? "./data";
-const dirtyMints = new Set<string>();
+const dirtyMints = new Map<string, string>();
 let stateDirty = false;
 let qualityDirty = false;
 let flushPromise: Promise<void> | null = null;
 let warnedMissingToken = false;
 
-export function markMintDirty(mint: string) { dirtyMints.add(mint); }
+export function markMintDirty(mint: string, venue = "pumpfun") { dirtyMints.set(mint, venue); }
 export function markCollectorStateDirty() { stateDirty = true; }
 export function markQualityManifestDirty() { qualityDirty = true; }
 
@@ -108,12 +108,12 @@ export async function restoreQualityManifest(localPath: string) {
   }
 }
 
-export async function restoreTokenEvents(mints: string[]) {
-  if (!token || mints.length === 0) return;
-  await Promise.all(mints.map(async mint => {
+export async function restoreTokenEvents(tokens: Array<{ mint: string; venue?: string }>) {
+  if (!token || tokens.length === 0) return;
+  await Promise.all(tokens.map(async ({ mint, venue = "pumpfun" }) => {
     const localPath = path.join(dataDir, "tokens", mint, "events.jsonl");
     try {
-      const response = await fetch(`https://huggingface.co/datasets/${repoName}/resolve/main/raw/pumpfun/${mint}/events.jsonl`, {
+      const response = await fetch(`https://huggingface.co/datasets/${repoName}/resolve/main/raw/${venue}/${mint}/events.jsonl`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(20_000)
       });
@@ -138,18 +138,18 @@ export async function flushHuggingFaceUploads() {
     return;
   }
   if (dirtyMints.size === 0 && !stateDirty && !qualityDirty) return;
-  const batch = [...dirtyMints];
+  const batch = [...dirtyMints.entries()];
   const includeState = stateDirty;
   const includeQuality = qualityDirty;
-  for (const mint of batch) dirtyMints.delete(mint);
+  for (const [mint] of batch) dirtyMints.delete(mint);
   if (includeState) stateDirty = false;
   if (includeQuality) qualityDirty = false;
   let batchFailed = false;
   flushPromise = (async () => {
     try {
-      const files = await Promise.all(batch.map(async mint => {
+      const files = await Promise.all(batch.map(async ([mint, venue]) => {
         const content = await readFile(path.join(dataDir, "tokens", mint, "events.jsonl"));
-        return { path: `raw/pumpfun/${mint}/events.jsonl`, content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" }) };
+        return { path: `raw/${venue}/${mint}/events.jsonl`, content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" }) };
       }));
       if (includeState) {
         const state = await readFile(path.join(dataDir, "collector-state.json"));
@@ -168,7 +168,7 @@ export async function flushHuggingFaceUploads() {
       console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""}${includeQuality ? " and data-quality manifest" : ""} to Hugging Face.`);
     } catch (error) {
       batchFailed = true;
-      for (const mint of batch) dirtyMints.add(mint);
+      for (const [mint, venue] of batch) dirtyMints.set(mint, venue);
       if (includeState) stateDirty = true;
       if (includeQuality) qualityDirty = true;
       console.error("Hugging Face upload failed; batch retained for retry:", String(error).slice(0, 240));
