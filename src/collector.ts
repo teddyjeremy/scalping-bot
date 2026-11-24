@@ -6,6 +6,7 @@ import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "./wallet-analytics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
+import { decodeProgramTradeEvents } from "./trade-events.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
 import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount, findPumpSwapPoolFromInstructions } from "./pool-state.js";
@@ -112,6 +113,8 @@ type TokenMetrics = {
   walletProfiles: Record<string, WalletProfile>;
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
+  exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[];
+  networkFeesLamports?: number; protocolFeesQuote?: number; creatorFeesQuote?: number; lpFeesQuote?: number; cashbackFeesQuote?: number; buybackFeesQuote?: number;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -215,6 +218,9 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.uniqueSellers ??= [];
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
+  metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= [];
+  metrics.networkFeesLamports ??= 0; metrics.protocolFeesQuote ??= 0; metrics.creatorFeesQuote ??= 0;
+  metrics.lpFeesQuote ??= 0; metrics.cashbackFeesQuote ??= 0; metrics.buybackFeesQuote ??= 0;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
@@ -448,7 +454,9 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
         volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
         volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
-        tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
+        tradeCountIsEstimate: (metrics.estimatedTradeCount ?? 0) > 0,
+    exactTradeCount: metrics.exactTradeCount ?? 0, estimatedTradeCount: metrics.estimatedTradeCount ?? 0,
+    tradeCountDefinition: "decoded_program_events_preferred_owner_balance_delta_fallback",
         maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
         largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol,
         largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
@@ -497,14 +505,56 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     }
   }
   const solUsd = await getSolUsd();
-  const knownQuoteMint = item.quoteMint ?? ensureMetrics(item).quoteMint;
-  // Do not guess SOL while the curve account has not yet identified the actual quote asset.
-  // The raw transaction is still persisted by the caller for later decoding.
-  if (!knownQuoteMint) return;
-  const quoteMint = knownQuoteMint;
-  const observations = deriveTradeObservations(tx, item.mint, solUsd, quoteMint);
-  if (observations.length === 0) return;
   const metrics = ensureMetrics(item);
+  const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
+  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint);
+  const observations: import("./metrics.js").TradeObservation[] = [];
+  if (decodedEvents.length > 0 && item.supplyDecimals != null) {
+    for (const event of decodedEvents) {
+      const quoteMint = event.venue === "pumpswap" ? (knownQuoteMint ?? event.quoteMint) : event.quoteMint;
+      const quoteDecimals = await getMintDecimals(quoteMint);
+      if (quoteDecimals == null) continue;
+      const tokenAmount = Number(event.tokenAmountRaw) / (10 ** item.supplyDecimals);
+      const quoteAmount = Number(event.quoteAmountRaw) / (10 ** quoteDecimals);
+      if (!Number.isFinite(tokenAmount) || tokenAmount <= 0 || !Number.isFinite(quoteAmount) || quoteAmount <= 0) continue;
+      const priceQuote = quoteAmount / tokenAmount;
+      const isSol = quoteMint === WRAPPED_SOL_MINT;
+      const isStable = quoteMint === USDC_MINT || quoteMint === USDT_MINT;
+      const quoteUsd = isSol ? solUsd : isStable ? 1 : null;
+      if (event.creator && item.creator !== event.creator) item.creator = event.creator;
+      if (item.quoteMint == null) item.quoteMint = quoteMint;
+      metrics.quoteMint = quoteMint;
+      metrics.quoteDecimals = quoteDecimals;
+      metrics.quoteSymbol = isSol ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+      metrics.volumeSolAvailable = isSol;
+      metrics.volumeUsdAvailable = quoteUsd != null;
+      const feeUi = (raw: bigint | null) => raw == null ? null : Number(raw) / (10 ** quoteDecimals);
+      observations.push({
+        wallet: event.user, side: event.side, tokenAmount, quoteMint, quoteAmount, priceQuote,
+        solAmount: isSol ? quoteAmount : 0, priceSol: isSol ? priceQuote : null,
+        priceUsd: quoteUsd == null ? null : priceQuote * quoteUsd,
+        feeLamports: tx.meta?.fee ?? 0, pricingMethod: "decoded_program_trade_event", confidence: "high",
+        eventName: event.eventName, protocolFeeQuote: feeUi(event.protocolFeeRaw), lpFeeQuote: feeUi(event.lpFeeRaw),
+        creatorFeeQuote: feeUi(event.creatorFeeRaw), cashbackFeeQuote: feeUi(event.cashbackRaw),
+        buybackFeeQuote: feeUi(event.buybackFeeRaw),
+        protocolFeeBps: event.protocolFeeBps == null ? null : Number(event.protocolFeeBps),
+        lpFeeBps: event.lpFeeBps == null ? null : Number(event.lpFeeBps),
+        creatorFeeBps: event.creatorFeeBps == null ? null : Number(event.creatorFeeBps)
+      });
+    }
+  }
+  const usedExactEvents = observations.length > 0;
+  const quoteMint = observations[0]?.quoteMint ?? knownQuoteMint;
+  if (!usedExactEvents) {
+    if (!knownQuoteMint) return;
+    observations.push(...deriveTradeObservations(tx, item.mint, solUsd, knownQuoteMint));
+  }
+  if (observations.length === 0) return;
+  if (!metrics.processedFeeSignatures!.includes(signature)) {
+    metrics.networkFeesLamports = (metrics.networkFeesLamports ?? 0) + (tx.meta?.fee ?? 0);
+    metrics.processedFeeSignatures!.push(signature);
+    if (metrics.processedFeeSignatures!.length > 20_000) metrics.processedFeeSignatures = metrics.processedFeeSignatures!.slice(-10_000);
+  }
   const observedAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
   for (const trade of observations) {
     const fundingSources = extractFundingSources(tx, trade.wallet);
@@ -512,6 +562,13 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       observedAt, slot, launchSlot: item.launchSlot ?? slot, launchAt: item.firstSeenAt,
       launchFeePayer: item.launchFeePayer ?? null, creator: item.creator, fundingSources
     });
+    if (trade.pricingMethod === "decoded_program_trade_event") metrics.exactTradeCount = (metrics.exactTradeCount ?? 0) + 1;
+    else metrics.estimatedTradeCount = (metrics.estimatedTradeCount ?? 0) + 1;
+    if (trade.protocolFeeQuote != null) metrics.protocolFeesQuote = (metrics.protocolFeesQuote ?? 0) + trade.protocolFeeQuote;
+    if (trade.creatorFeeQuote != null) metrics.creatorFeesQuote = (metrics.creatorFeesQuote ?? 0) + trade.creatorFeeQuote;
+    if (trade.lpFeeQuote != null) metrics.lpFeesQuote = (metrics.lpFeesQuote ?? 0) + trade.lpFeeQuote;
+    if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
+    if (trade.buybackFeeQuote != null) metrics.buybackFeesQuote = (metrics.buybackFeesQuote ?? 0) + trade.buybackFeeQuote;
     const profile = metrics.walletProfiles[trade.wallet];
     await appendTokenEvent(item.mint, {
       schemaVersion: 7, kind: "wallet_activity", mint: item.mint, signature, slot, blockTime: tx.blockTime,
@@ -520,7 +577,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       isCreator: profile.creator, isLaunchFeePayer: profile.launchFeePayer,
       sniperCandidate: profile.sniperCandidate, bundleCandidate: profile.bundleCandidate,
       botScore: profile.botScore, botSignals: profile.botSignals,
-      fundingSources: profile.fundingSources, confidence: "heuristic_wallet_balance_delta"
+      fundingSources: profile.fundingSources, confidence: trade.confidence, pricingMethod: trade.pricingMethod
     });
     metrics.tradeCount++;
     metrics.volumeQuote += trade.quoteAmount;
@@ -580,13 +637,16 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
     walletCohorts: metrics.walletCohorts, walletProfileCount: Object.keys(metrics.walletProfiles).length,
+    networkFeeLamports: tx.meta?.fee ?? 0, protocolFeesQuote: metrics.protocolFeesQuote,
+    creatorFeesQuote: metrics.creatorFeesQuote, lpFeesQuote: metrics.lpFeesQuote,
+    cashbackFeesQuote: metrics.cashbackFeesQuote, buybackFeesQuote: metrics.buybackFeesQuote,
     lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
     marketCapQuote: marketCap(latest.priceQuote, item.supplyUi ?? null),
     marketCapSol: latest.priceSol == null ? null : marketCap(latest.priceSol, item.supplyUi ?? null),
     marketCapUsd: marketCap(latest.priceUsd, item.supplyUi ?? null), marketCapBasis: "total_supply_fdv",
     priceChangePctFromFirstTrade: metrics.firstPriceUsd && latest.priceUsd != null
       ? ((latest.priceUsd / metrics.firstPriceUsd) - 1) * 100 : null,
-    pricingMethod: "owner_balance_delta_estimate", confidence: "low"
+    pricingMethod: usedExactEvents ? "decoded_program_trade_event" : "owner_balance_delta_estimate", confidence: usedExactEvents ? "high" : "low"
   });
   await recordDueSnapshots(item, Date.now());
   await persistState();
