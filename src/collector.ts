@@ -74,6 +74,9 @@ type CollectorState = {
   lastProgramSignature?: string;
   reconcileTarget?: string;
   reconcileBefore?: string;
+  lastLaunchLabSignature?: string;
+  launchLabReconcileTarget?: string;
+  launchLabReconcileBefore?: string;
 };
 const statePath = path.join(DATA_DIR, "collector-state.json");
 const qualityPath = path.join(DATA_DIR, "quality", "data-quality-manifest.json");
@@ -92,6 +95,7 @@ let expiryTimer: NodeJS.Timeout | undefined;
 let runTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 let reconciliation: Promise<void> | undefined;
+let stonkReconciliation: Promise<void> | undefined;
 
 let cachedSolUsd: { value: number; fetchedAt: number } | undefined;
 const quoteDecimalsCache = new Map<string, number>();
@@ -715,6 +719,59 @@ async function reconcileMissedLaunches() {
   })().catch(error => console.error("Launch reconciliation paused safely:", String(error).slice(0, 240))).finally(() => { reconciliation = undefined; });
   return reconciliation;
 }
+async function reconcileMissedStonkLaunches() {
+  if (stonkReconciliation) return stonkReconciliation;
+  stonkReconciliation = (async () => {
+    const connection = nextRpc();
+    const head = (await connection.getSignaturesForAddress(LAUNCHLAB_PROGRAM, { limit: 1 }, "confirmed"))[0];
+    if (!head) return;
+    if (!state.lastLaunchLabSignature) {
+      state.lastLaunchLabSignature = head.signature;
+      await persistState();
+      console.log("Initialized resumable StonkFun LaunchLab cursor at current chain head.");
+      return;
+    }
+    if (!state.launchLabReconcileTarget) {
+      state.launchLabReconcileTarget = head.signature;
+      state.launchLabReconcileBefore = undefined;
+      await persistState();
+    }
+    let pages = 0;
+    let reachedCheckpoint = false;
+    while (pages < MAX_RECONCILE_PAGES && !shuttingDown) {
+      const options: { limit: number; before?: string; until?: string } = { limit: RECONCILE_PAGE_SIZE };
+      if (state.launchLabReconcileBefore) options.before = state.launchLabReconcileBefore;
+      options.until = state.lastLaunchLabSignature;
+      const signatures = await connection.getSignaturesForAddress(LAUNCHLAB_PROGRAM, options, "confirmed");
+      if (signatures.length === 0) { reachedCheckpoint = true; break; }
+      const page = signatures.filter(entry => entry.signature !== state.lastLaunchLabSignature);
+      if (page.length === 0) { reachedCheckpoint = true; break; }
+      for (const entry of [...page].reverse()) {
+        const tx = await fetchTransaction(entry.signature);
+        if (!tx) throw new Error(`Could not fetch LaunchLab reconciliation transaction ${entry.signature}; cursor retained.`);
+        if (!tx.meta?.err && stonkFunLaunchInstructions(tx).length > 0) {
+          await processStonkLaunch(entry.signature, entry.slot, tx.meta?.logMessages ?? [], tx);
+        }
+      }
+      state.launchLabReconcileBefore = page[page.length - 1].signature;
+      await persistState();
+      pages++;
+      if (page.length < RECONCILE_PAGE_SIZE) { reachedCheckpoint = true; break; }
+    }
+    if (reachedCheckpoint) {
+      state.lastLaunchLabSignature = state.launchLabReconcileTarget;
+      state.launchLabReconcileTarget = undefined;
+      state.launchLabReconcileBefore = undefined;
+      await persistState();
+      console.log("StonkFun LaunchLab reconciliation reached the previous checkpoint.");
+    } else {
+      console.log("StonkFun reconciliation paused at a saved cursor; it will resume on the next run.");
+    }
+  })().catch(error => console.error("StonkFun reconciliation paused safely:", String(error).slice(0, 240)))
+    .finally(() => { stonkReconciliation = undefined; });
+  return stonkReconciliation;
+}
+
 async function loadState() {
   await mkdir(DATA_DIR, { recursive: true });
   await restoreCollectorState(statePath);
@@ -791,6 +848,7 @@ async function shutdown(reason: string) {
   }
   await Promise.all([...activeSubscriptions.keys()].map(stopCapture));
   if (reconciliation) await reconciliation;
+  if (stonkReconciliation) await stonkReconciliation;
   await persistState();
   await flushHuggingFaceUploads();
   console.log("Collector stopped.");
@@ -815,6 +873,7 @@ async function main() {
   stonkDiscoverySubscription = { connection: launchLabDiscovery, id: stonkId };
   console.log("Listening for verified Pump.fun and StonkFun launches; collecting quote-asset prices, pool state, transaction fee telemetry and trade evidence. API keys configured:", keys.length);
   void reconcileMissedLaunches();
+  void reconcileMissedStonkLaunches();
   expiryTimer = setInterval(async () => {
     for (const item of Object.values(state.tokens)) if (item.expiresAt <= Date.now()) await stopCapture(item.mint);
   }, 15_000);
