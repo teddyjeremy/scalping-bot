@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -360,6 +360,9 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     realTokenReservesUi: realToken, highPriceQuote: metrics.highPriceQuote, lowPriceQuote: metrics.lowPriceQuote, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
+  metrics.processedTradeSignatures!.push(signature);
+  if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
+  await persistState();
   await recordDueSnapshots(item, Date.now());
   await persistState();
 }
@@ -538,8 +541,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       void subscribePumpSwapPool(item, poolDiscovery.pool);
     }
   }
-  const solUsd = await getSolUsd();
   const metrics = ensureMetrics(item);
+  if (metrics.processedTradeSignatures!.includes(signature)) return;
+  const solUsd = await getSolUsd();
   if (metrics.processedTradeSignatures!.includes(signature)) return;
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
   const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allTransactionInstructions(tx));
@@ -587,7 +591,19 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   }
   if (observations.length === 0) return;
   if (!metrics.processedFeeSignatures!.includes(signature)) {
-    metrics.networkFeesLamports = (metrics.networkFeesLamports ?? 0) + (tx.meta?.fee ?? 0);
+    const message = tx.transaction.message as unknown as { accountKeys?: Array<unknown>; header?: { numRequiredSignatures?: number } };
+    const firstAccount = message.accountKeys?.[0] as { pubkey?: unknown } | string | undefined;
+    const feePayer = typeof firstAccount === "string" ? firstAccount :
+      firstAccount && typeof firstAccount === "object" && "pubkey" in firstAccount ? String(firstAccount.pubkey) : null;
+    const requiredSignatures = message.header?.numRequiredSignatures ?? 1;
+    const baseFee = requiredSignatures * 5_000;
+    const actualFee = tx.meta?.fee ?? 0;
+    const priorityFeeEstimate = Math.max(0, actualFee - baseFee);
+    metrics.networkFeesLamports = (metrics.networkFeesLamports ?? 0) + actualFee;
+    metrics.networkFeeTransactions = (metrics.networkFeeTransactions ?? 0) + 1;
+    metrics.baseSignatureFeeLamports = (metrics.baseSignatureFeeLamports ?? 0) + Math.min(actualFee, baseFee);
+    metrics.estimatedPriorityFeeLamports = (metrics.estimatedPriorityFeeLamports ?? 0) + priorityFeeEstimate;
+    metrics.lastFeePayer = feePayer;
     metrics.processedFeeSignatures!.push(signature);
     if (metrics.processedFeeSignatures!.length > 20_000) metrics.processedFeeSignatures = metrics.processedFeeSignatures!.slice(-10_000);
   }
@@ -596,7 +612,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     const fundingSources = extractFundingSources(tx, trade.wallet);
     metrics.walletProfiles[trade.wallet] = updateWalletProfile(metrics.walletProfiles[trade.wallet], { ...trade, confidence: trade.confidence }, {
       observedAt, slot, launchSlot: item.launchSlot ?? slot, launchAt: item.firstSeenAt,
-      launchFeePayer: item.launchFeePayer ?? null, creator: item.creator, fundingSources
+      launchFeePayer: item.launchFeePayer ?? null, creator: item.creator, signature,
+      feePayer: feePayerForTrade(tx), networkFeeLamports: feePayerForTrade(tx) === trade.wallet ? (tx.meta?.fee ?? 0) : 0, fundingSources
     });
     if (trade.pricingMethod === "decoded_program_trade_event") metrics.exactTradeCount = (metrics.exactTradeCount ?? 0) + 1;
     else metrics.estimatedTradeCount = (metrics.estimatedTradeCount ?? 0) + 1;
@@ -897,6 +914,13 @@ function getAccountKey(key: unknown): string {
 function transactionInstructions(tx: ParsedTransactionWithMeta) {
   // Only message-level instructions can prove a launch; CPI instructions are not launch evidence.
   return getTopLevelInstructions(tx.transaction.message as unknown as { instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }> });
+}
+function feePayerForTrade(tx: ParsedTransactionWithMeta): string | null {
+  const message = tx.transaction.message as unknown as { accountKeys?: Array<unknown> };
+  const first = message.accountKeys?.[0] as { pubkey?: unknown } | string | undefined;
+  if (typeof first === "string") return first;
+  if (first && typeof first === "object" && "pubkey" in first) return String(first.pubkey);
+  return null;
 }
 function allTransactionInstructions(tx: ParsedTransactionWithMeta) {
   const topLevel = transactionInstructions(tx);
