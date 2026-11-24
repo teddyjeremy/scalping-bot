@@ -9,7 +9,8 @@ export type MintSafetyInput = {
 };
 export type LiquidityEvidence =
   | { kind: "bonding_curve"; programOwnerVerified: boolean; curvePdaVerified: boolean; active: boolean; realQuoteReserve: number; virtualQuoteReserve: number; realTokenReserve: number; virtualTokenReserve: number }
-  | { kind: "locked_lp"; poolOwnerVerified: boolean; lpMintVerified: boolean; lockVaultTokenAccountVerified: boolean; lockAuthorityVerified: boolean; lockedLpAmount: number; lpSupply: number; minimumLockedSharePct?: number };
+  | { kind: "locked_lp"; poolOwnerVerified: boolean; lpMintVerified: boolean; lockVaultTokenAccountVerified: boolean; lockAuthorityVerified: boolean; lockedLpAmount: number; lpSupply: number; minimumLockedSharePct?: number }
+  | { kind: "burned_lp"; poolOwnerVerified: boolean; lpMintVerified: boolean; lpSupplyRaw: string; poolLpSupplyRaw: string };
 export type DiscoveryCandidateInput = {
   launchAgeSeconds: number;
   fdvUsd: number | null;
@@ -74,6 +75,10 @@ export function evaluateLiquiditySafety(evidence: LiquidityEvidence | null): Gat
       reasons: valid ? [] : ["bonding_curve_state_or_reserves_unverified"],
       warnings: ["bonding_curve_reserves_are_protocol_curve_inventory_not_locked_lp"]
     };
+  }
+  if (evidence.kind === "burned_lp") {
+    const burned = evidence.poolOwnerVerified && evidence.lpMintVerified && evidence.poolLpSupplyRaw !== "0" && evidence.lpSupplyRaw === "0";
+    return { eligible: burned, reasons: burned ? [] : ["lp_burn_not_verified_on_chain"], warnings: [] };
   }
   const valid = evidence.poolOwnerVerified && evidence.lpMintVerified &&
     evidence.lockVaultTokenAccountVerified && evidence.lockAuthorityVerified &&
