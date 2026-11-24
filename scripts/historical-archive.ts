@@ -47,7 +47,8 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
 type TradeSourceCursor = { before?: string; complete: boolean; pages: number };
-type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };\ntype Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
+type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 async function save() {
