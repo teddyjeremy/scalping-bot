@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletProfiles: Record<string, WalletProfile>;
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
-  exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
+  exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[]; historicalMetricsBackfillComplete?: boolean; historicalMetricsBackfillProcessedAt?: number; historicalMetricsBackfillSignatureCount?: number;
   networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; buyPriceImpactSamples?: number[]; sellPriceImpactSamples?: number[]; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
@@ -442,7 +442,7 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
   });
   return true;
 }
-async function recordDueSnapshots(item: TokenState, observedAt: number) {
+async function recordDueSnapshots(item: TokenState, observedAt: number, skipHolderSnapshots = false) {
   const metrics = ensureMetrics(item);
   const isStonkFun = item.venue === "stonkfun";
   const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote" || metrics.priceSource === "raydium_cpmm_vault_reserves" || metrics.priceSource === "decoded_program_trade_event";
@@ -522,7 +522,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       metrics.snapshotsRecorded.push(seconds);
       await persistState();
     }
-    if (!metrics.holderSnapshotsRecorded.includes(seconds)) {
+    if (!skipHolderSnapshots && !metrics.holderSnapshotsRecorded.includes(seconds)) {
       try {
         const recorded = await recordHolderDistributionSnapshot(item, seconds, null);
         if (recorded) {
@@ -569,7 +569,7 @@ async function recordTransactionFeeMetrics(item: TokenState, tx: ParsedTransacti
     feeModelNote: "Base signature fee is estimated at 5000 lamports per required signer; remainder is an estimated priority fee and may include other fee components."
   });
 }
-async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true) {
+async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true, historicalReplay = false) {
   const allInstructions = allTransactionInstructions(tx);
   let migrationDetected = false;
   if (item.venue === "stonkfun") {
@@ -809,7 +809,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   });
   metrics.processedTradeSignatures!.push(signature);
   if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
-  await recordDueSnapshots(item, Date.now());
+  await recordDueSnapshots(item, historicalReplay ? observedAt : Date.now(), historicalReplay);
   await persistState();
 }
 
