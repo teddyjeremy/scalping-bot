@@ -313,7 +313,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
   metrics.lastPriceSol = priceSol; metrics.lastPriceUsd = priceUsd; metrics.lastPriceQuote = priceQuote;
-  metrics.lastPriceObservedAt = observedAt;
+  metrics.lastPriceObservedAt = Date.now();
   metrics.curveRealSolReserves = isSol ? realQuote : null;
   metrics.curveRealTokenReserves = realToken;
   metrics.curveVirtualSolReserves = isSol ? virtualQuote : null;
@@ -761,7 +761,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.lastPriceQuote = latest.priceQuote;
     metrics.lastPriceSol = latest.priceSol;
     metrics.lastPriceUsd = latest.priceUsd;
-    metrics.lastPriceObservedAt = Date.now();
+    metrics.lastPriceObservedAt = observedAt;
     metrics.priceSource = "decoded_program_trade_event";
   } else if (!usedExactEvents && (item.venue === "stonkfun" || (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote"))) {
     metrics.firstPriceQuote ??= latest.priceQuote;
@@ -770,7 +770,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.lastPriceQuote = latest.priceQuote;
     metrics.lastPriceSol = latest.priceSol;
     metrics.lastPriceUsd = latest.priceUsd;
-    metrics.lastPriceObservedAt = Date.now();
+    metrics.lastPriceObservedAt = observedAt;
     metrics.priceSource = "owner_balance_delta_estimate";
   }
   if (metrics.priceSource === "decoded_program_trade_event" || metrics.priceSource === "owner_balance_delta_estimate") {
