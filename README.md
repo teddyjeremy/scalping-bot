@@ -48,9 +48,18 @@ data/
 
 Each JSONL line is an independent event, so partial files survive normal process restarts.
 
-## Production storage
+## Free Hugging Face dataset storage
 
-Do not commit collected datasets to this Git repository. It is public, Git history grows permanently, and GitHub is not a database/object store. Run the collector as a persistent worker with a mounted persistent disk or write each token's JSONL stream to S3-compatible object storage. Back up the state/checkpoint separately.
+The collector can upload changed token JSONL files in batches every 30 seconds to a Hugging Face dataset repository. It uses the official `@huggingface/hub` JavaScript client. The local `data/` directory remains the working buffer and checkpoint store; Hugging Face receives snapshots of each token's event file.
+
+1. Create a Hugging Face access token with **Write** permission at https://huggingface.co/settings/tokens.
+2. Set `HF_TOKEN` in your local `.env` and set `HF_DATASET_REPO=ndeda/solana-scalping-data`.
+3. Keep `.env` private and never commit the token.
+4. Run `npm install`, `npm run typecheck`, then `npm run dev`.
+
+Uploads are retried on later batches after failures. The collector must remain running and have internet access. This does not make the collector a 24/7 hosted service: on a free setup, run it on your laptop. The local `data/` directory must be backed up because Hugging Face is the remote dataset copy, not the live collector's restart checkpoint.
+
+The dataset is currently configured as `ndeda/solana-scalping-data`. Upload paths use `raw/pumpfun/<MINT>/events.jsonl`. Do not upload `.env`, API keys, or wallet signing secrets.
 
 ## Historical window
 
