@@ -136,7 +136,7 @@ type PumpCurveState = {
   realTokenRaw: bigint; realSolLamports: bigint; totalSupplyRaw: bigint;
   creatorFeeBps: bigint | null; isHolderReward: boolean | null;
   creatorFeeAccruedRaw: bigint | null; protocolFeesAccruedRaw: bigint | null;
-  isMayhemMode: boolean | null; isCashbackCoin: boolean | null;
+  isMayhemMode: boolean | null; isCashbackCoin: boolean | null;\n  canEditCreatorFee: boolean | null; curveDepth: number | null; initialVirtualQuoteReservesRaw: bigint | null;\n  postCompleteBaseOutRaw: bigint | null; postCompleteQuoteInRaw: bigint | null;
 };
 function decodePumpCurve(data: Buffer): PumpCurveState | null {
   // Anchor account: discriminator + five u64 reserves/supply + bool + creator.
