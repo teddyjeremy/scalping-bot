@@ -74,3 +74,15 @@ The requested November 1–23, 2026 period needs an archive backfill. Helius arc
 - Add candidate screening (FDV/market cap, liquidity, trade count, unique buyers, volume).
 - Add wallet clustering labels as evidence-based features, not ground-truth "insider" labels.
 - Export clean per-token features for offline strategy research.
+
+
+## GitHub Actions hosted collection
+
+The repository now includes `.github/workflows/live-collector.yml`. It can be started manually from **Actions → Pump.fun live collector → Run workflow**, and it is also scheduled every five hours. Each run collects for 285 minutes, then shuts down and attempts to upload event files and the collector checkpoint to Hugging Face. The next run restores the checkpoint and event files for tokens whose capture windows are still active.
+
+Required GitHub **Actions repository secrets**:
+- `HELIUS_API_KEY_1` (required)
+- `HF_TOKEN` (required; Hugging Face write token)
+- `HELIUS_API_KEY_2` and `HELIUS_API_KEY_3` (optional additional RPC rotation)
+
+GitHub-hosted jobs have a six-hour maximum execution time. Scheduled starts can be delayed, so this is repeated bounded collection, not guaranteed uninterrupted 24/7 streaming. Events occurring during the gap between runs can be missed; remote checkpoints preserve state but do not backfill missed chain activity. Historical backfill, Stonks support, full Pump/PumpSwap trade decoding, and reconciliation are not yet implemented.
