@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { Connection, PublicKey, type ParsedTransactionWithMeta } from "@solana/web3.js";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
@@ -46,7 +46,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   }
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, { before?: string; complete: boolean; pages: number; sources?: Record<string, { before?: string; complete: boolean; pages: number }> }>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
+type TradeSourceCursor = { before?: string; complete: boolean; pages: number };\ntype MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };\ntype Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 async function save() {
@@ -169,7 +169,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   progress.sources ??= {};
   for (let sourceIndex = 0; sourceIndex < addresses.length; sourceIndex++) {
     const address = addresses[sourceIndex];
-    const source = progress.sources[address] ?? { complete: false, pages: 0 };
+    const source: TradeSourceCursor = progress.sources[address] ?? { complete: false, pages: 0 };
     while (!source.complete && source.pages < MAX_PAGES) {
       const page = await rpc("getSignaturesForAddress(source)", c => c.getSignaturesForAddress(new PublicKey(address), { limit: 100, ...(source.before ? { before: source.before } : {}) }, "confirmed"));
       if (!page.length) { source.complete = true; break; }
@@ -214,7 +214,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       source.pages++;
       if (reachedLaunchBoundary || page.length < 100) source.complete = true;
       progress.sources[address] = source;
-      progress.pages = Object.values(progress.sources).reduce((sum, item) => sum + item.pages, 0);
+      progress.pages = Object.values(progress.sources).reduce<number>((sum, item) => sum + item.pages, 0);
       progress.complete = addresses.every(candidate => progress.sources?.[candidate]?.complete);
       state.tradeCursors![record.mint] = progress;
       await save();
