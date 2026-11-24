@@ -171,7 +171,6 @@ for (const sample of samples) {
     });
   const match = decoded.find(item =>
     item.mint === sample.mint &&
-    item.pool === sample.pool &&
     item.platformConfig === sample.platformConfig
   ) ?? null;
 
