@@ -62,3 +62,13 @@ test("does not claim realized PnL when observed sells exceed observed buys", () 
   assert.equal(profile.realizedPnlQuote, null);
   assert.equal(profile.sellExceedsObservedBuys, true);
 });
+
+test("aggregates multiple swap events in one signature but counts one wallet transaction", () => {
+  const context = { observedAt: 20_000, slot: 900, launchSlot: 899, launchAt: 0, launchFeePayer: null, creator: null, signature: "same-signature" };
+  let profile = updateWalletProfile(undefined, { wallet: "trader", side: "buy", tokenAmount: 10, quoteAmount: 1, confidence: "high" }, context);
+  profile = updateWalletProfile(profile, { wallet: "trader", side: "buy", tokenAmount: 20, quoteAmount: 2, confidence: "high" }, context);
+  assert.equal(profile.transactionCount, 1);
+  assert.equal(profile.buyCount, 2);
+  assert.equal(profile.tokenBought, 30);
+  assert.equal(profile.exactQuoteSpent, 3);
+});
