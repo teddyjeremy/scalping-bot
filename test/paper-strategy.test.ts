@@ -38,8 +38,8 @@ test("holds rather than fabricating a zero-price exit when the price feed is mis
 });
 test("volatility widens the trailing stop while low volatility tightens it", () => {
   const opened = evaluateScalpDecision(base).position!;
-  const lowVol = evaluateScalpDecision({ ...base, now: 80_000, price: opened.entryPrice * 0.92, volatilityPct: 0.1 }, { ...opened, peakPrice: opened.entryPrice });
-  const highVol = evaluateScalpDecision({ ...base, now: 80_000, price: opened.entryPrice * 0.92, volatilityPct: 10 }, { ...opened, peakPrice: opened.entryPrice });
+  const lowVol = evaluateScalpDecision({ ...base, now: 80_000, price: opened.entryPrice * 0.91, volatilityPct: 0.1 }, { ...opened, peakPrice: opened.entryPrice });
+  const highVol = evaluateScalpDecision({ ...base, now: 80_000, price: opened.entryPrice * 0.91, volatilityPct: 10 }, { ...opened, peakPrice: opened.entryPrice });
   assert.equal(lowVol.action, "exit");
   assert.equal(highVol.action, "hold");
 });
