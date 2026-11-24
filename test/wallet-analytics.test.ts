@@ -41,3 +41,24 @@ test("extracts direct system transfer funders from parsed top-level and inner in
   };
   assert.deepEqual(extractFundingSources(tx, "wallet"), ["funderA", "funderB"]);
 });
+
+test("deduplicates transaction counts and computes observed inventory PnL", () => {
+  const base = { observedAt: 1_000, slot: 10, launchSlot: 10, launchAt: 0, launchFeePayer: null, creator: "dev" };
+  let profile = updateWalletProfile(undefined, { wallet: "dev", side: "buy", tokenAmount: 100, quoteAmount: 2, confidence: "high" }, { ...base, signature: "sig1" });
+  profile = updateWalletProfile(profile, { wallet: "dev", side: "sell", tokenAmount: 25, quoteAmount: 1, confidence: "high" }, { ...base, observedAt: 2_000, slot: 11, signature: "sig2" });
+  assert.equal(profile.transactionCount, 2);
+  assert.equal(profile.exactTransactionCount, 2);
+  assert.equal(profile.trackedTokenBalance, 75);
+  assert.equal(profile.realizedPnlQuote, 0.5);
+  assert.equal(profile.sellExceedsObservedBuys, false);
+  const summary = summarizeWalletCohorts({ dev: profile });
+  assert.equal(summary.creatorRealizedPnlQuote, 0.5);
+});
+
+test("does not claim realized PnL when observed sells exceed observed buys", () => {
+  let profile = updateWalletProfile(undefined, { wallet: "wallet", side: "sell", tokenAmount: 10, quoteAmount: 1, confidence: "high" }, {
+    observedAt: 1_000, slot: 20, launchSlot: 20, launchAt: 0, launchFeePayer: null, creator: null
+  });
+  assert.equal(profile.realizedPnlQuote, null);
+  assert.equal(profile.sellExceedsObservedBuys, true);
+});
