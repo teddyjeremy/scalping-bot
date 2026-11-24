@@ -505,8 +505,9 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         tradeFeesQuote: metrics.tradeFeesQuote, tradeFeesBase: metrics.tradeFeesBase,
         shareFeesQuote: metrics.shareFeesQuote, lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
         buybackFeesQuote: metrics.buybackFeesQuote,
-        venueTradeFeesQuote: metrics.venueTradeFeesQuote, inputTransferFeesQuote: metrics.inputTransferFeesQuote,
-        outputTransferFeesQuote: metrics.outputTransferFeesQuote,
+        venueTradeFeesQuote: metrics.venueTradeFeesQuote, venueTradeFeesBase: metrics.venueTradeFeesBase,
+        inputTransferFeesQuote: metrics.inputTransferFeesQuote, outputTransferFeesQuote: metrics.outputTransferFeesQuote,
+        inputTransferFeesBase: metrics.inputTransferFeesBase, outputTransferFeesBase: metrics.outputTransferFeesBase,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
         curveRealSolReserves: metrics.curveRealSolReserves ?? null,
@@ -686,6 +687,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
     if (trade.buybackFeeQuote != null) metrics.buybackFeesQuote = (metrics.buybackFeesQuote ?? 0) + trade.buybackFeeQuote;
     if (trade.venueTradeFeeQuote != null) metrics.venueTradeFeesQuote = (metrics.venueTradeFeesQuote ?? 0) + trade.venueTradeFeeQuote;
+    if (trade.venueTradeFeeBase != null) metrics.venueTradeFeesBase = (metrics.venueTradeFeesBase ?? 0) + trade.venueTradeFeeBase;
+    if (trade.inputTransferFeeBase != null) metrics.inputTransferFeesBase = (metrics.inputTransferFeesBase ?? 0) + trade.inputTransferFeeBase;
+    if (trade.outputTransferFeeBase != null) metrics.outputTransferFeesBase = (metrics.outputTransferFeesBase ?? 0) + trade.outputTransferFeeBase;
     if (trade.inputTransferFeeQuote != null) metrics.inputTransferFeesQuote = (metrics.inputTransferFeesQuote ?? 0) + trade.inputTransferFeeQuote;
     if (trade.outputTransferFeeQuote != null) metrics.outputTransferFeesQuote = (metrics.outputTransferFeesQuote ?? 0) + trade.outputTransferFeeQuote;
     const profile = metrics.walletProfiles[trade.wallet];
