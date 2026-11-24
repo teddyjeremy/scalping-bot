@@ -42,6 +42,16 @@ The collector does not yet calculate PumpSwap pool reserves/LP depth after gradu
 5. A mint subscription is not a complete universal trade feed for every venue. Add PumpSwap/Raydium/Orca pool subscriptions and pool-specific decoders as the next step.
 6. The collector records raw evidence. It does not yet label snipers/insiders or assert wallet relationships. Those require transaction-graph analysis and cautious heuristics.
 
+## Data quality and historical quarantine
+
+The collector validates Pump launches using the exact top-level instruction discriminators from the official Pump IDL (`create` and `create_v2`), then checks that the first instruction account is owned by SPL Token or Token-2022. A generic log word such as `Create` is not launch evidence: associated-token-account creation can appear in unrelated buy transactions.
+
+The Hugging Face dataset includes `quality/data-quality-manifest.json`. Consumers must exclude every mint listed under `quarantinedMints`; the original raw event files are retained for audit and are not silently deleted. The previously stored wrapped-SOL directory is explicitly quarantined because its recorded "launch" transaction is a Pump buy instruction, not a token creation. On startup, existing checkpoint entries are revalidated against their launch signatures before subscriptions resume. A transaction that cannot be fetched remains pending verification and is not used for collection.
+
+Transaction fetches are serialized and rate-limited across configured Helius keys, with exponential backoff on HTTP 429 and signature-level deduplication. This protects the provider quota; if incoming activity exceeds the configured request budget, delayed transaction enrichment is possible and should be monitored.
+
+Run `npm test` to check the strict instruction decoder and its false-positive cases.
+
 ## Setup
 
 Requires Node.js 22+.
