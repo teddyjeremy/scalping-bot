@@ -198,6 +198,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
 
     trade_status = ("complete" if trade_count else "empty_verified") if capture_complete else "partial"
     failed_status = ("complete" if failed_count else "empty_verified") if capture_complete else "partial"
+    observation_status = ("complete" if observation_count else "empty_verified") if capture_complete else "partial"
     ledger.update({
         "schema_version": "3.0.0",
         "mint": mint,
@@ -216,11 +217,12 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
             "launch": stream("complete", 1 if launch_record else 0, {str(launch_record.get("signature"))} if launch_record.get("signature") else set()),
             "trade_events": stream(trade_status, trade_count, trade_signatures, duplicate_count),
             "failed_transactions": stream(failed_status, failed_count, failed_signatures),
-            "transaction_observations": stream(trade_status, observation_count, observation_signatures),
+            "transaction_observations": stream(observation_status, observation_count, observation_signatures),
         },
         "validation": {
             "level": "COMPLETE" if capture_complete and research_ready else ("PARTIAL" if page_files else "METADATA_ONLY"),
             "errors": [],
+            "warnings": (summary or {}).get("capture", {}).get("completionBlockers", []),
         },
         "capture": (summary or {}).get("capture"),
         "dataset_paths": sorted(paths),
