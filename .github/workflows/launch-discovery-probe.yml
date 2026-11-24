@@ -1,11 +1,6 @@
 name: Launch discovery endpoint probe
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/launch-discovery-probe.mjs"
-      - ".github/workflows/launch-discovery-probe.yml"
   workflow_dispatch:
 
 permissions:
