@@ -102,6 +102,9 @@ function signers(tx: ParsedTransactionWithMeta): string[] {
 async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransactionWithMeta) {
   const file = path.join(ROOT, "launches", record.venue, record.mint + ".json");
   await mkdir(path.dirname(file), { recursive: true });
+  const launchMintBalances = (tx.meta?.postTokenBalances ?? []).filter(balance => balance.mint === record.mint);
+  const observedSupplyRaw = launchMintBalances.reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n);
+  const observedSupplyDecimals = launchMintBalances[0]?.uiTokenAmount.decimals ?? null;
   const payload = {
     schemaVersion: 1, recordType: "historical_launch", historicalWindow: { start: START, end: END },
     ...record, observedAt: new Date().toISOString(),
