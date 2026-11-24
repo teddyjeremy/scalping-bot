@@ -18,16 +18,17 @@ This repository contains the first-stage **research data collector**. It does no
 For each newly detected Pump mint, the collector now attempts to store the mint supply and records derived trade observations and timed market snapshots alongside the raw transaction evidence.
 
 Current derived fields include:
-- Estimated execution price in SOL and USD, plus price-change percentage from the first observed trade.
-- Estimated market capitalization in SOL and USD (estimated price multiplied by on-chain token supply; this is not circulating market cap).
+- Pump bonding-curve spot price in SOL and USD from the curve account virtual reserves, plus price change from the first observed curve price. A separate low-confidence wallet-balance-delta estimate is retained for trade-level cross-checking.
+- FDV-style market capitalization in SOL and USD (bonding-curve spot price multiplied by on-chain total supply; this is not circulating market cap).
 - Timed snapshots at 5, 10, 15, 30, 60, 120, 300 and 600 seconds after launch.
 - Buy/sell observation counts, estimated SOL/USD volume, unique observed buyers and sellers.
 - Highest/lowest observed USD price, maximum observed drawdown, largest observed buy/sell size, and time to 1.2x, 1.5x, 1.7x and 2x from the first observed USD price.
+- Bonding-curve virtual and real SOL/token reserves, completion status, quote mint, and creator field when present in the curve account.
 - Raw transaction balances, token balances, logs, fees, slot and signature remain available for re-analysis.
 
 **Important data-quality warning:** the current price calculation is a conservative owner-balance-delta estimate, not a decoded Pump bonding-curve or PumpSwap execution price. Rent, unrelated SOL transfers, wrapped-SOL routing and multi-leg transactions can distort it. Each derived trade is labelled with its pricing method and low confidence. USD conversion uses a public SOL/USD reference endpoint and may be null when that endpoint is unavailable. Market cap is FDV-style (price × total supply), not circulating market cap, and it is not liquidity.
 
-The collector does not yet calculate trustworthy bonding-curve reserves, PumpSwap pool reserves/LP depth, slippage/exit capacity, creator/insider wallet labels, holder concentration excluding pool accounts, or venue-normalized prices. Those require venue-specific instruction and account decoders. Do not use the low-confidence estimated prices as live execution quotes or treat these metrics as verified until compared with known transactions and venue quotes.
+The collector does not yet calculate PumpSwap pool reserves/LP depth after graduation, executable slippage/exit capacity, creator/insider wallet labels, holder concentration excluding pool accounts, or venue-normalized prices. Those require venue-specific instruction and account decoders. Do not use the low-confidence estimated prices as live execution quotes or treat these metrics as verified until compared with known transactions and venue quotes.
 
 ## Important limitations of this first cut
 
