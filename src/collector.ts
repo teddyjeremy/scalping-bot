@@ -986,7 +986,7 @@ async function shutdown(reason: string) {
   if (reconciliation) await reconciliation;
   if (stonkReconciliation) await stonkReconciliation;
   await persistState();
-  await flushHuggingFaceUploads();
+  await flushHuggingFaceUploads(true);
   console.log("Collector stopped.");
 }
 async function main() {
