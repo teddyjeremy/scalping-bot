@@ -610,10 +610,9 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
   if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err) return;
   const launches = stonkFunLaunchInstructions(tx);
   for (const launch of launches) {
-    const { mint, quoteMint, pool, platformConfig, kind } = launch;
+    const { mint, quoteMint, pool, platformConfig, kind, creator } = launch;
     if (state.tokens[mint] || !await isMintAccount(mint)) continue;
     const feePayer = getAccountKey(tx.transaction.message.accountKeys[0]);
-    const creator = getAccountKey(tx.transaction.message.accountKeys[1]);
     const firstSeenAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
     let supplyUi: number | null = null;
     let supplyDecimals: number | null = null;
