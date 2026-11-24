@@ -489,8 +489,9 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         baseSignatureFeeLamports: metrics.baseSignatureFeeLamports,
         lastFeePayer: metrics.lastFeePayer ?? null,
         protocolFeesQuote: metrics.protocolFeesQuote, platformFeesQuote: metrics.platformFeesQuote,
-        creatorFeesQuote: metrics.creatorFeesQuote, shareFeesQuote: metrics.shareFeesQuote,
-        lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
+        creatorFeesQuote: metrics.creatorFeesQuote, creatorFeesBase: metrics.creatorFeesBase,
+        tradeFeesQuote: metrics.tradeFeesQuote, tradeFeesBase: metrics.tradeFeesBase,
+        shareFeesQuote: metrics.shareFeesQuote, lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
         buybackFeesQuote: metrics.buybackFeesQuote,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
@@ -591,8 +592,15 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
         feeLamports: tx.meta?.fee ?? 0, pricingMethod: "decoded_program_trade_event", confidence: "high",
         eventName: event.eventName, protocolFeeQuote: feeUi(event.protocolFeeRaw),
         platformFeeQuote: feeUi(event.platformFeeRaw), shareFeeQuote: feeUi(event.shareFeeRaw),
-        lpFeeQuote: feeUi(event.lpFeeRaw), creatorFeeQuote: feeUi(event.creatorFeeRaw), cashbackFeeQuote: feeUi(event.cashbackRaw),
-        buybackFeeQuote: feeUi(event.buybackFeeRaw),
+        lpFeeQuote: feeUi(event.lpFeeRaw),
+        creatorFeeQuote: event.creatorFeeMint ? (event.creatorFeeMint === quoteMint ? feeUi(event.creatorFeeRaw) : null) : feeUi(event.creatorFeeRaw),
+        creatorFeeBase: event.creatorFeeMint === item.mint ? feeUi(event.creatorFeeRaw) : null,
+        tradeFeeQuote: event.tradeFeeMint === quoteMint ? feeUi(event.tradeFeeRaw ?? null) : null,
+        tradeFeeBase: event.tradeFeeMint === item.mint ? feeUi(event.tradeFeeRaw ?? null) : null,
+        tradeFeeMint: event.tradeFeeMint ?? null, creatorFeeMint: event.creatorFeeMint ?? null,
+        inputTransferFeeRaw: event.inputTransferFeeRaw?.toString() ?? null,
+        outputTransferFeeRaw: event.outputTransferFeeRaw?.toString() ?? null,
+        cashbackFeeQuote: feeUi(event.cashbackRaw), buybackFeeQuote: feeUi(event.buybackFeeRaw),
         protocolFeeBps: event.protocolFeeBps == null ? null : Number(event.protocolFeeBps),
         lpFeeBps: event.lpFeeBps == null ? null : Number(event.lpFeeBps),
         creatorFeeBps: event.creatorFeeBps == null ? null : Number(event.creatorFeeBps)
@@ -637,6 +645,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.platformFeeQuote != null) metrics.platformFeesQuote = (metrics.platformFeesQuote ?? 0) + trade.platformFeeQuote;
     if (trade.shareFeeQuote != null) metrics.shareFeesQuote = (metrics.shareFeesQuote ?? 0) + trade.shareFeeQuote;
     if (trade.creatorFeeQuote != null) metrics.creatorFeesQuote = (metrics.creatorFeesQuote ?? 0) + trade.creatorFeeQuote;
+    if (trade.creatorFeeBase != null) metrics.creatorFeesBase = (metrics.creatorFeesBase ?? 0) + trade.creatorFeeBase;
+    if (trade.tradeFeeQuote != null) metrics.tradeFeesQuote = (metrics.tradeFeesQuote ?? 0) + trade.tradeFeeQuote;
+    if (trade.tradeFeeBase != null) metrics.tradeFeesBase = (metrics.tradeFeesBase ?? 0) + trade.tradeFeeBase;
     if (trade.lpFeeQuote != null) metrics.lpFeesQuote = (metrics.lpFeesQuote ?? 0) + trade.lpFeeQuote;
     if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
     if (trade.buybackFeeQuote != null) metrics.buybackFeesQuote = (metrics.buybackFeesQuote ?? 0) + trade.buybackFeeQuote;
@@ -721,6 +732,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     walletCohorts: metrics.walletCohorts, walletProfileCount: Object.keys(metrics.walletProfiles).length,
     networkFeeLamports: tx.meta?.fee ?? 0, protocolFeesQuote: metrics.protocolFeesQuote,
     platformFeesQuote: metrics.platformFeesQuote, creatorFeesQuote: metrics.creatorFeesQuote,
+    creatorFeesBase: metrics.creatorFeesBase, tradeFeesQuote: metrics.tradeFeesQuote, tradeFeesBase: metrics.tradeFeesBase,
     shareFeesQuote: metrics.shareFeesQuote, lpFeesQuote: metrics.lpFeesQuote,
     cashbackFeesQuote: metrics.cashbackFeesQuote, buybackFeesQuote: metrics.buybackFeesQuote,
     lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
