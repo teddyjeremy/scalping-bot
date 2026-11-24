@@ -225,9 +225,10 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     // Published bonding-curve schedule: 0.95% protocol + 0.30% creator = 1.25%.
     // Custom-pair Holder Rewards can override the creator component; exact event values take precedence.
     estimatedProtocolFeeBps: 95,
-    estimatedCreatorFeeBps: curve.creatorFeeBps == null ? 30 : Number(curve.creatorFeeBps),
-    estimatedTotalCurveFeeBps: 95 + (curve.creatorFeeBps == null ? 30 : Number(curve.creatorFeeBps)),
-    feeRateSource: curve.creatorFeeBps == null ? "published_pump_bonding_curve_schedule" : "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate",
+    configuredCreatorFeeBps: curve.creatorFeeBps?.toString() ?? null,
+    estimatedCreatorFeeBps: curve.isHolderReward ? null : (curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
+    estimatedTotalCurveFeeBps: curve.isHolderReward ? null : 95 + (curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
+    feeRateSource: curve.isHolderReward ? "holder_rewards_rate_not_yet_decoded" : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate" : "published_pump_bonding_curve_schedule",
     feeIsEstimateNotExecution: true,
     creatorFeeAccruedQuote: curve.creatorFeeAccruedRaw == null ? null : Number(curve.creatorFeeAccruedRaw) / quoteDivisor,
     protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor,
@@ -252,14 +253,14 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
     const supply = item.supplyUi ?? null;
     const marketCapSol = marketCap(priceSol, supply);
     const marketCapUsd = marketCap(priceUsd, supply);
-    const priceChangePct = metrics.firstPriceUsd && priceUsd != null
-      ? ((priceUsd / metrics.firstPriceUsd) - 1) * 100 : null;
+    const priceChangePct = metrics.firstPriceQuote && metrics.lastPriceQuote != null
+      ? ((metrics.lastPriceQuote / metrics.firstPriceQuote) - 1) * 100 : null;
     await appendTokenEvent(item.mint, {
       schemaVersion: 4, kind: "market_snapshot", mint: item.mint,
       elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
       priceQuote: metrics.lastPriceQuote ?? null, quoteMint: metrics.quoteMint ?? null,
       quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
-      marketCapSol, marketCapUsd, totalSupply: supply,
+      marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), totalSupply: supply,
       priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
@@ -308,8 +309,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
     volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
-    lastPriceSol: latest.priceSol, lastPriceUsd: latest.priceUsd,
-    marketCapSol: marketCap(latest.priceSol, item.supplyUi ?? null),
+    lastPriceSol: latest.priceSol, lastPriceQuote: latest.priceQuote, lastPriceUsd: latest.priceUsd,
+    marketCapQuote: marketCap(latest.priceQuote, item.supplyUi ?? null),
+    marketCapSol: latest.priceSol == null ? null : marketCap(latest.priceSol, item.supplyUi ?? null),
     marketCapUsd: marketCap(latest.priceUsd, item.supplyUi ?? null),
     priceChangePctFromFirstTrade: metrics.firstPriceUsd && latest.priceUsd != null
       ? ((latest.priceUsd / metrics.firstPriceUsd) - 1) * 100 : null,
