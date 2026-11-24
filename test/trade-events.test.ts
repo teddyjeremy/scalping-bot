@@ -109,4 +109,6 @@ test("decodes StonkFun LaunchLab trade events using matching swap instruction ac
   assert.equal(result[0].platformFeeRaw, 20_000n);
   assert.equal(result[0].creatorFeeRaw, 30_000n);
   assert.equal(result[0].shareFeeRaw, 40_000n);
+  assert.equal(result[0].preTradeBaseReserveRaw, 4n);
+  assert.equal(result[0].preTradeQuoteReserveRaw, 5n);
 });
