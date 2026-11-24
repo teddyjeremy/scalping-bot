@@ -1,0 +1,26 @@
+name: Helius read-only collection preflight
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Validate all Helius keys and historical address indexes
+        run: node scripts/helius-preflight.mjs
