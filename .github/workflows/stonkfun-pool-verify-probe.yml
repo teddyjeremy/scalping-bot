@@ -1,0 +1,29 @@
+name: StonkFun pool launch verification probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/stonkfun-pool-verify-probe.mjs"
+      - ".github/workflows/stonkfun-pool-verify-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Verify LaunchLab pool creation signatures
+        run: node scripts/stonkfun-pool-verify-probe.mjs
