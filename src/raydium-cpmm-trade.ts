@@ -69,11 +69,17 @@ export function decodeRaydiumCpmmTradeEvent(
       if (instructionPool !== pool || instructionInputMint !== inputMint || instructionOutputMint !== outputMint) continue;
       if (inputMint !== targetMint && outputMint !== targetMint) continue;
       const side = inputMint === targetMint ? "sell" : "buy";
+      const tokenAmountRaw = side === "buy"
+        ? outputAmount > outputTransferFeeRaw ? outputAmount - outputTransferFeeRaw : 0n
+        : inputAmount + inputTransferFeeRaw;
+      const quoteAmountRaw = side === "buy"
+        ? inputAmount + inputTransferFeeRaw
+        : outputAmount > outputTransferFeeRaw ? outputAmount - outputTransferFeeRaw : 0n;
+      if (tokenAmountRaw <= 0n || quoteAmountRaw <= 0n) return null;
       return {
         venue: "raydium_cpmm", eventName: "SwapEvent", mint: targetMint, user, side, timestamp: null,
-        tokenAmountRaw: side === "buy" ? outputAmount : inputAmount,
-        quoteMint: side === "buy" ? inputMint : outputMint,
-        quoteAmountRaw: side === "buy" ? inputAmount : outputAmount,
+        tokenAmountRaw, quoteMint: side === "buy" ? inputMint : outputMint,
+        quoteAmountRaw,
         pool, tradeFeeRaw, tradeFeeMint: inputMint,
         creatorFeeRaw, creatorFeeMint: creatorFeeOnInput ? inputMint : outputMint,
         inputTransferFeeRaw, outputTransferFeeRaw
