@@ -41,6 +41,8 @@ export type DecodedProgramTrade = {
   creatorFeeBps: bigint | null;
   instructionName: string | null;
   pool: string | null;
+  creator: string | null;
+  feeRecipient: string | null;
   virtualQuoteReservesRaw: bigint | null;
   realQuoteReservesRaw: bigint | null;
 };
@@ -59,10 +61,10 @@ function decodePump(data: Buffer): DecodedProgramTrade | null {
     r.u64(); // virtual token reserves
     r.u64(); // real SOL reserves
     r.u64(); // real token reserves
-    r.key(); // fee recipient
+    const feeRecipient = r.key();
     const protocolFeeBps = r.u64();
     const protocolFeeRaw = r.u64();
-    r.key(); // creator
+    const creator = r.key();
     const creatorFeeBps = r.u64();
     const creatorFeeRaw = r.u64();
     // Older event versions end here; current versions append volume, quote and reward fields.
@@ -94,7 +96,8 @@ function decodePump(data: Buffer): DecodedProgramTrade | null {
       venue: "pumpfun", eventName: "TradeEvent", mint, user, side: isBuy ? "buy" : "sell",
       timestamp, tokenAmountRaw, quoteMint, quoteAmountRaw, protocolFeeRaw, lpFeeRaw: null,
       creatorFeeRaw, cashbackRaw, buybackFeeRaw, protocolFeeBps, lpFeeBps: null, creatorFeeBps,
-      instructionName, pool: null, virtualQuoteReservesRaw, realQuoteReservesRaw
+      instructionName, pool: null, creator: creator === ZERO_KEY ? null : creator,
+      feeRecipient: feeRecipient === ZERO_KEY ? null : feeRecipient, virtualQuoteReservesRaw, realQuoteReservesRaw
     };
   } catch { return null; }
 }
@@ -118,7 +121,7 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
     const pool = r.key();
     const user = r.key();
     r.key(); r.key(); r.key(); r.key(); // token accounts and protocol recipient
-    r.key(); // coin creator
+    const creator = r.key();
     const creatorFeeBps = r.u64();
     const creatorFeeRaw = r.u64();
     let instructionName: string | null = null;
@@ -144,6 +147,7 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
       quoteMint: SOL_MINT, quoteAmountRaw: userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw,
       protocolFeeRaw, lpFeeRaw, creatorFeeRaw, cashbackRaw, buybackFeeRaw,
       protocolFeeBps, lpFeeBps, creatorFeeBps, instructionName, pool,
+      creator: creator === ZERO_KEY ? null : creator, feeRecipient: null,
       virtualQuoteReservesRaw, realQuoteReservesRaw: null
     };
   } catch { return null; }
