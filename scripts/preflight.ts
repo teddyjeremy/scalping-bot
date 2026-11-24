@@ -9,11 +9,11 @@ if (!hfToken) throw new Error("HF_TOKEN is missing.");
 
 const connections = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-key=${key}`, "confirmed"));
 const rpcResults = await Promise.all(connections.map(async (connection, index) => {
-  const [health, slot, genesisHash] = await Promise.all([
-    connection.getHealth(), connection.getSlot("confirmed"), connection.getGenesisHash()
+  const [version, slot, genesisHash] = await Promise.all([
+    connection.getVersion(), connection.getSlot("confirmed"), connection.getGenesisHash()
   ]);
-  if (health !== "ok" || !Number.isSafeInteger(slot) || slot <= 0) throw new Error(`Helius key ${index + 1} failed health/slot validation.`);
-  return { keyIndex: index + 1, health, slot, genesisHash };
+  if (!version["solana-core"] || !Number.isSafeInteger(slot) || slot <= 0) throw new Error(`Helius key ${index + 1} failed version/slot validation.`);
+  return { keyIndex: index + 1, health: "ok", coreVersion: version["solana-core"], slot, genesisHash };
 }));
 if (new Set(rpcResults.map(result => result.genesisHash)).size !== 1) throw new Error("Configured Helius keys are not connected to the same Solana cluster.");
 
