@@ -114,9 +114,11 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
       err: tx.meta?.err ?? null, signers: signers(tx),
       preBalances: tx.meta?.preBalances ?? [], postBalances: tx.meta?.postBalances ?? [],
       preTokenBalances: tx.meta?.preTokenBalances ?? [], postTokenBalances: tx.meta?.postTokenBalances ?? [],
-      logMessages: tx.meta?.logMessages ?? []
+      logMessages: tx.meta?.logMessages ?? [],
+      launchTransactionObservedMintSupplyRaw: observedSupplyRaw > 0n ? observedSupplyRaw.toString() : null,
+      launchTransactionObservedMintDecimals: observedSupplyDecimals
     },
-    dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false }
+    dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false, launchTransactionSupplyMayBePartial: true }
   };
   await writeFile(file, JSON.stringify(payload) + "\n");
 }
@@ -358,7 +360,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     developerActivity: { creatorWallets, launchFeePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
-      historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,\n      launchTransactionObservedSupplyRaw: observedSupplyRaw, launchTransactionObservedSupplyMayBePartial: true,
+      historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
+      launchTransactionObservedSupplyRaw: observedSupplyRaw, launchTransactionObservedSupplyMayBePartial: true,
       historicalHolderSnapshots: false, transactionEventAmounts: "decoded program events",
       walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
     }
