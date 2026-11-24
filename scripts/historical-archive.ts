@@ -133,6 +133,9 @@ type TradeSourceCursor = { before?: string; paginationToken?: string; complete: 
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
 type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
+const mintShard = (mint: string) => createHash("sha256").update(mint).digest("hex").slice(0, 2);
+const launchRecordPath = (record: { venue: string; mint: string }, suffix = ".json") => path.join(ROOT, "launches", record.venue, mintShard(record.mint), record.mint + suffix);
+const tradeRecordDirectory = (record: { venue: string; mint: string }) => path.join(ROOT, "trades", record.venue, mintShard(record.mint), record.mint);
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 let saveQueue: Promise<void> = Promise.resolve();
 async function save() {
@@ -178,7 +181,7 @@ function signers(tx: ParsedTransactionWithMeta): string[] {
   return keys.filter(k => "signer" in k && k.signer).map(k => keyString(k.pubkey));
 }
 async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransactionWithMeta) {
-  const file = path.join(ROOT, "launches", record.venue, record.mint + ".json");
+  const file = launchRecordPath(record);
   await mkdir(path.dirname(file), { recursive: true });
   const launchMintBalances = (tx.meta?.postTokenBalances ?? []).filter(balance => balance.mint === record.mint);
   const touchedBalanceSumRaw = launchMintBalances.reduce((sum, balance) => sum + BigInt(balance.uiTokenAmount.amount), 0n);
@@ -279,7 +282,7 @@ function impliedQuotePrice(quoteRaw: bigint, tokenRaw: bigint, tokenDecimals: nu
   return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 async function collectMintTrades(record: Cursor["launches"][string]) {
-  const directory = path.join(ROOT, "trades", record.venue, record.mint);
+  const directory = tradeRecordDirectory(record);
   await mkdir(directory, { recursive: true });
   const until = record.blockTime + CAPTURE_SECONDS;
   const curve = record.venue === "pumpfun"
@@ -380,11 +383,11 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   return progress.complete;
 }
 async function buildMintResearchSummary(record: Cursor["launches"][string]) {
-  const directory = path.join(ROOT, "trades", record.venue, record.mint);
+  const directory = tradeRecordDirectory(record);
   const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
   const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
   const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
-  const launchEvidence = JSON.parse(await readFile(path.join(ROOT, "launches", record.venue, record.mint + ".json"), "utf8")) as { transaction?: { feeLamports?: number | null } };
+  const launchEvidence = JSON.parse(await readFile(launchRecordPath(record), "utf8")) as { transaction?: { feeLamports?: number | null } };
   const sourceHash = createHash("sha256");
   const seen = new Set<string>();
   const failedSeen = new Set<string>();
@@ -516,13 +519,13 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
     }
   };
-  await writeFile(path.join(ROOT, "launches", record.venue, record.mint + ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
+  await writeFile(launchRecordPath(record, ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
 }
 async function summaryNeedsRefresh(record: Cursor["launches"][string]): Promise<boolean> {
-  const summaryPath = path.join(ROOT, "launches", record.venue, record.mint + ".summary.json");
+  const summaryPath = launchRecordPath(record, ".summary.json");
   try {
     const summary = JSON.parse(await readFile(summaryPath, "utf8")) as { sourcePageCount?: number; sourcePageFingerprint?: string; creator?: string | null; launchFeePayer?: string | null };
-    const directory = path.join(ROOT, "trades", record.venue, record.mint);
+    const directory = tradeRecordDirectory(record);
     const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
     const hash = createHash("sha256");
     for (const name of names) { hash.update(name); hash.update(await readFile(path.join(directory, name))); }
