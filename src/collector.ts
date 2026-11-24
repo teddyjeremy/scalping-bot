@@ -513,10 +513,18 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   if (item.venue === "pumpfun") {
     const poolDiscovery = findPumpSwapPoolFromInstructions(transactionInstructions(tx), item.mint);
     if (poolDiscovery && (!item.quoteMint || item.quoteMint === poolDiscovery.quoteMint)) {
-      if (item.pumpSwapPoolAddress !== poolDiscovery.pool) {
-        item.pumpSwapPoolAddress = poolDiscovery.pool;
-        await persistState();
+      if (item.pumpSwapPoolAddress !== poolDiscovery.pool) item.pumpSwapPoolAddress = poolDiscovery.pool;
+      if (!item.quoteMint) {
+        item.quoteMint = poolDiscovery.quoteMint;
+        const decimals = await getMintDecimals(poolDiscovery.quoteMint);
+        if (decimals != null) {
+          const metrics = ensureMetrics(item);
+          metrics.quoteMint = poolDiscovery.quoteMint;
+          metrics.quoteDecimals = decimals;
+          metrics.quoteSymbol = poolDiscovery.quoteMint === WRAPPED_SOL_MINT ? "SOL" : poolDiscovery.quoteMint === USDC_MINT ? "USDC" : poolDiscovery.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+        }
       }
+      await persistState();
       void subscribePumpSwapPool(item, poolDiscovery.pool);
     }
   }
