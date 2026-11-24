@@ -14,7 +14,7 @@ TOKEN = os.environ["HF_TOKEN"]
 MINT = "So11111111111111111111111111111111111111112"
 SIGNATURE = "3mR3oyYXHEPWWCUhv3URSCjVXABTUoGDv4eowDGJp5Dv522sghdc66janYMgm7KU4uLYwRmvTXV5CQuV6voRwQUw"
 RAW_PATH = f"raw/pumpfun/{MINT}/events.jsonl"
-STATE_PATH = "state/collector-state.json"
+STATE_PATH = "state/collector-state.json"\nQUALITY_PATH = "quality/data-quality-manifest.json"
 
 
 def read_repo_file(api: HfApi, path: str) -> bytes:
@@ -65,6 +65,22 @@ def main() -> None:
         else:
             print("Checkpoint already excludes the false-positive mint/signature.")
 
+    if QUALITY_PATH in files:
+        quality_bytes = read_repo_file(api, QUALITY_PATH)
+        quality = json.loads(quality_bytes.decode("utf-8"))
+        quarantined = quality.setdefault("quarantinedMints", {})
+        record = quarantined.setdefault(MINT, {})
+        record.update({
+            "status": "deleted",
+            "reason": "Confirmed false positive: the recorded launch transaction invokes Pump BuyExactQuoteInV3, not create/create_v2.",
+            "rawPath": RAW_PATH,
+            "rawDeleted": True,
+            "retainedForAudit": False,
+        })
+        updated_quality = (json.dumps(quality, indent=2) + "\\n").encode("utf-8")
+        operations.append(CommitOperationAdd(path_in_repo=QUALITY_PATH, path_or_fileobj=updated_quality))
+        print("Updated quality manifest to mark the invalid raw record physically deleted.")
+
     if not operations:
         print("No dataset changes were required.")
         return
@@ -84,7 +100,7 @@ def main() -> None:
     checkpoint = json.loads(read_repo_file(api, STATE_PATH).decode("utf-8"))
     if MINT in checkpoint.get("tokens", {}) or SIGNATURE in checkpoint.get("seenLaunchSignatures", []):
         raise RuntimeError("Post-commit verification failed: checkpoint still references the false positive.")
-    print("VERIFIED: invalid raw file is deleted and checkpoint no longer references it.")
+    if QUALITY_PATH in remaining:\n        verified_quality = json.loads(read_repo_file(api, QUALITY_PATH).decode("utf-8"))\n        if verified_quality.get("quarantinedMints", {}).get(MINT, {}).get("status") != "deleted":\n            raise RuntimeError("Post-commit verification failed: quality manifest does not mark the raw record deleted.")\n    print("VERIFIED: invalid raw file is deleted, checkpoint excludes it, and quality manifest marks it deleted.")
 
 
 if __name__ == "__main__":
