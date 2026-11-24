@@ -7,7 +7,8 @@
     "dev": "tsx src/collector.ts",
     "start": "node --import tsx src/collector.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "research:wallet-graph": "node --import tsx scripts/reconstruct-wallet-graph.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
