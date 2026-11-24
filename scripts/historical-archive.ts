@@ -492,6 +492,12 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
+    capture: {
+      windowSeconds: CAPTURE_SECONDS,
+      complete: state.tradeCursors?.[record.mint]?.complete === true,
+      totalSourcePages: state.tradeCursors?.[record.mint]?.pages ?? names.length,
+      sources: Object.fromEntries(Object.entries(state.tradeCursors?.[record.mint]?.sources ?? {}).map(([address, cursor]) => [address, { complete: cursor.complete, pages: cursor.pages }]))
+    },
     networkFees: { launchTransactionFeeLamports: launchEvidence.transaction?.feeLamports ?? null, uniqueTradeTransactions: tradeFees.size, tradeTransactionFeeLamportsTotal: [...tradeFees.values()].reduce((sum, value) => sum + value, 0), failedTransactions: failedFees.size, failedTransactionFeeLamportsTotal: [...failedFees.values()].reduce((sum, value) => sum + value, 0) },
     developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
