@@ -1,15 +1,6 @@
 name: Pump.fun live collector
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/live-collector.yml"
-      - "src/**"
-      - "package.json"
-      - "tsconfig.json"
-      - "test/**"
-      - "scripts/**"
   workflow_dispatch:
 
 concurrency:
