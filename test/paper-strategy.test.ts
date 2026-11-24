@@ -51,3 +51,15 @@ test("records estimated round-trip venue fees in paper PnL", () => {
   assert.ok(closed.position?.netRealizedPnlQuote != null);
   assert.ok(closed.position!.netRealizedPnlQuote! < 0);
 });
+
+test("rejects entry when bot, sniper or bundle candidates dominate early buys", () => {
+  const recentTrades = base.recentTrades.map((trade, index) => index < 8 ? { ...trade, botScore: 90, sniperCandidate: true } : trade);
+  const result = evaluateScalpDecision({ ...base, recentTrades });
+  assert.equal(result.action, "reject");
+  assert.ok(result.dangerSignals.includes("bot_sniper_or_bundle_candidates_dominate_early_buys"));
+});
+test("extreme holder concentration is a danger signal before entry", () => {
+  const result = evaluateScalpDecision({ ...base, top20HolderSharePct: 96 });
+  assert.equal(result.action, "reject");
+  assert.ok(result.dangerSignals.includes("extreme_top20_holder_concentration"));
+});
