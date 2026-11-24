@@ -59,11 +59,17 @@ export function deriveTradeObservations(
   const accountKeys = tx.transaction.message.accountKeys.map(k =>
     typeof k === "string" ? k : String(k.pubkey)
   );
+  // Pool/vault PDAs also change both token balances; count only wallet owners that signed this transaction.
+  // This avoids counting the pool's opposite-side reserve movement as a second trade.
+  const signers = new Set(tx.transaction.message.accountKeys.flatMap(k =>
+    typeof k === "string" ? [] : (k.signer ? [String(k.pubkey)] : [])
+  ));
   const feePayer = accountKeys[0];
   const feeLamports = tx.meta.fee ?? 0;
   const out: TradeObservation[] = [];
 
   for (const wallet of owners) {
+    if (!signers.has(wallet)) continue;
     const tokenDelta = uiAmount(postBase.get(wallet)) - uiAmount(preBase.get(wallet));
     if (!Number.isFinite(tokenDelta) || Math.abs(tokenDelta) < 1e-12) continue;
     let quoteDelta: number;
