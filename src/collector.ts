@@ -86,7 +86,7 @@ const nextRpc = () => rateLimitConnection(rpc[(rpcCursor++) % rpc.length]);
 
 type TokenMetrics = {
   tradeCount: number; buyCount: number; sellCount: number;
-  volumeSol: number; volumeUsd: number; volumeQuote: number;
+  volumeSol: number; volumeUsd: number; volumeQuote: number; volumeSolAvailable?: boolean; volumeUsdAvailable?: boolean;
   uniqueBuyers: string[]; uniqueSellers: string[];
   firstPriceSol: number | null; firstPriceUsd: number | null;
   lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
@@ -198,6 +198,8 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   // Upgrade checkpoint metrics written by earlier schema versions without losing accumulated values.
   metrics.volumeSol = Number.isFinite(metrics.volumeSol) ? metrics.volumeSol : 0;
   metrics.volumeUsd = Number.isFinite(metrics.volumeUsd) ? metrics.volumeUsd : 0;
+  metrics.volumeSolAvailable ??= false;
+  metrics.volumeUsdAvailable ??= false;
   metrics.volumeQuote = Number.isFinite(metrics.volumeQuote) ? metrics.volumeQuote : 0;
   metrics.largestBuySol = Number.isFinite(metrics.largestBuySol) ? metrics.largestBuySol : 0;
   metrics.largestSellSol = Number.isFinite(metrics.largestSellSol) ? metrics.largestSellSol : 0;
@@ -281,6 +283,8 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   const priceSol = isSol ? priceQuote : null;
   const quoteSymbol = isSol ? "SOL" : isUsdc ? "USDC" : isUsdt ? "USDT" : "UNKNOWN_SPL";
   const metrics = ensureMetrics(item);
+  metrics.volumeSolAvailable = isSol;
+  metrics.volumeUsdAvailable = isUsdc || isUsdt || (isSol && solUsd != null);
   item.supplyUi = supply;
   if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" || metrics.quoteMint !== quoteMint) {
     metrics.firstPriceSol = priceSol; metrics.firstPriceUsd = priceUsd; metrics.firstPriceQuote = priceQuote;
@@ -369,7 +373,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
       priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
-      volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd, volumeQuote: metrics.volumeQuote,
+      volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
+      volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
       tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
       maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
       largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
@@ -420,9 +425,16 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       metrics.largestSellQuote = Math.max(metrics.largestSellQuote, trade.quoteAmount);
       metrics.largestSellSol = Math.max(metrics.largestSellSol, trade.solAmount);
     }
-    metrics.volumeSol += trade.solAmount;
-    if (trade.priceUsd != null && trade.quoteMint !== "So11111111111111111111111111111111111111112") metrics.volumeUsd += trade.quoteAmount * trade.priceUsd / trade.priceQuote;
-    else if (trade.priceUsd != null) metrics.volumeUsd += trade.quoteAmount * (solUsd ?? 0);
+    if (trade.quoteMint === WRAPPED_SOL_MINT) {
+      metrics.volumeSol += trade.quoteAmount;
+      metrics.volumeSolAvailable = true;
+    }
+    if (trade.priceUsd != null) {
+      metrics.volumeUsd += trade.quoteMint === WRAPPED_SOL_MINT
+        ? trade.quoteAmount * (solUsd ?? 0)
+        : trade.quoteAmount * trade.priceUsd / trade.priceQuote;
+      metrics.volumeUsdAvailable = true;
+    }
     // Trade-level balance deltas are retained as low-confidence wallet/volume evidence only.
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
@@ -452,7 +464,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     quoteMint, quoteSymbol: metrics.quoteSymbol ?? null,
     tradeVolumeQuote: observations.reduce((sum, trade) => sum + trade.quoteAmount, 0),
     tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
-    volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd, volumeQuote: metrics.volumeQuote,
+    volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null, volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
     largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
     tradeCountIsEstimate: true, tradeCountDefinition: "owner_balance_delta_observations",
     uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
@@ -498,6 +510,8 @@ async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string,
   metrics.quoteMint = pool.quoteMint;
   metrics.quoteDecimals = quoteDecimals;
   metrics.quoteSymbol = isSol ? "SOL" : pool.quoteMint === USDC_MINT ? "USDC" : pool.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+  metrics.volumeSolAvailable = isSol;
+  metrics.volumeUsdAvailable = quoteUsd != null;
   metrics.firstPriceQuote ??= priceQuote;
   metrics.firstPriceSol ??= priceSol;
   metrics.firstPriceUsd ??= priceUsd;
@@ -960,6 +974,8 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
     metrics.quoteMint = quoteMint;
     metrics.quoteSymbol = quoteSymbol;
     metrics.quoteDecimals = quoteDecimals;
+    metrics.volumeSolAvailable = quoteMint === WRAPPED_SOL_MINT;
+    metrics.volumeUsdAvailable = quoteMint === WRAPPED_SOL_MINT || quoteMint === USDC_MINT || quoteMint === USDT_MINT;
     metrics.priceSource = "owner_balance_delta_estimate";
     state.tokens[mint] = item;
     await appendTokenEvent(mint, {
