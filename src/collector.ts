@@ -7,6 +7,7 @@ import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
+import { decodeLaunchLabPoolState } from "./pool-state.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -708,9 +709,32 @@ async function captureMint(item: TokenState) {
     if (item.venue === "stonkfun" && item.poolAddress) {
       const poolAddress = new PublicKey(item.poolAddress);
       const recordPoolState = (info: { owner: PublicKey; lamports: number; data: Buffer }, slot: number) => {
+        const decoded = info.owner.equals(LAUNCHLAB_PROGRAM) ? decodeLaunchLabPoolState(info.data) : null;
+        const identityValid = Boolean(decoded && decoded.baseMint === mint && decoded.quoteMint === item.quoteMint && decoded.platformConfig === item.platformConfig);
+        const realBaseUi = identityValid && decoded ? Number(decoded.realBaseRaw) / (10 ** decoded.baseDecimals) : null;
+        const realQuoteUi = identityValid && decoded ? Number(decoded.realQuoteRaw) / (10 ** decoded.quoteDecimals) : null;
+        const reserveRatioQuotePerBase = realBaseUi != null && realBaseUi > 0 && realQuoteUi != null
+          ? realQuoteUi / realBaseUi : null;
         void appendTokenEvent(mint, {
-          schemaVersion: 5, kind: "launchlab_pool_state_raw", mint, poolAddress: item.poolAddress,
-          slot, owner: info.owner.toBase58(), lamports: info.lamports, dataBase64: info.data.toString("base64")
+          schemaVersion: 6, kind: "launchlab_pool_state", mint, poolAddress: item.poolAddress,
+          slot, owner: info.owner.toBase58(), lamports: info.lamports, dataBase64: info.data.toString("base64"),
+          decodeStatus: !decoded ? "unrecognized_layout_or_owner" : identityValid ? "decoded_identity_verified" : "decoded_identity_mismatch",
+          poolStatus: identityValid ? decoded?.statusName : null,
+          migrateType: identityValid ? decoded?.migrateTypeName : null,
+          baseMint: identityValid ? decoded?.baseMint : null, quoteMint: identityValid ? decoded?.quoteMint : null,
+          baseDecimals: identityValid ? decoded?.baseDecimals : null, quoteDecimals: identityValid ? decoded?.quoteDecimals : null,
+          supplyRaw: identityValid ? decoded?.supplyRaw.toString() : null,
+          totalBaseSellRaw: identityValid ? decoded?.totalBaseSellRaw.toString() : null,
+          virtualBaseRaw: identityValid ? decoded?.virtualBaseRaw.toString() : null,
+          virtualQuoteRaw: identityValid ? decoded?.virtualQuoteRaw.toString() : null,
+          realBaseRaw: identityValid ? decoded?.realBaseRaw.toString() : null,
+          realQuoteRaw: identityValid ? decoded?.realQuoteRaw.toString() : null,
+          realBaseUi, realQuoteUi, reserveRatioQuotePerBase,
+          reserveRatioIsSpotPrice: false,
+          platformFeeRaw: identityValid ? decoded?.platformFeeRaw.toString() : null,
+          quoteProtocolFeeRaw: identityValid ? decoded?.quoteProtocolFeeRaw.toString() : null,
+          baseVault: identityValid ? decoded?.baseVault : null, quoteVault: identityValid ? decoded?.quoteVault : null,
+          creator: identityValid ? decoded?.creator : null
         });
       };
       curveId = connection.onAccountChange(poolAddress, (accountInfo, context) => {
