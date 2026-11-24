@@ -585,6 +585,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       metrics.volumeSolAvailable = isSol;
       metrics.volumeUsdAvailable = quoteUsd != null;
       const feeUi = (raw: bigint | null) => raw == null ? null : Number(raw) / (10 ** quoteDecimals);
+      const baseFeeUi = (raw: bigint | null) => raw == null || item.supplyDecimals == null ? null : Number(raw) / (10 ** item.supplyDecimals);
       observations.push({
         wallet: event.user, side: event.side, tokenAmount, quoteMint, quoteAmount, priceQuote,
         solAmount: isSol ? quoteAmount : 0, priceSol: isSol ? priceQuote : null,
@@ -594,9 +595,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
         platformFeeQuote: feeUi(event.platformFeeRaw), shareFeeQuote: feeUi(event.shareFeeRaw),
         lpFeeQuote: feeUi(event.lpFeeRaw),
         creatorFeeQuote: event.creatorFeeMint ? (event.creatorFeeMint === quoteMint ? feeUi(event.creatorFeeRaw) : null) : feeUi(event.creatorFeeRaw),
-        creatorFeeBase: event.creatorFeeMint === item.mint ? feeUi(event.creatorFeeRaw) : null,
+        creatorFeeBase: event.creatorFeeMint === item.mint ? baseFeeUi(event.creatorFeeRaw) : null,
         tradeFeeQuote: event.tradeFeeMint === quoteMint ? feeUi(event.tradeFeeRaw ?? null) : null,
-        tradeFeeBase: event.tradeFeeMint === item.mint ? feeUi(event.tradeFeeRaw ?? null) : null,
+        tradeFeeBase: event.tradeFeeMint === item.mint ? baseFeeUi(event.tradeFeeRaw ?? null) : null,
         tradeFeeMint: event.tradeFeeMint ?? null, creatorFeeMint: event.creatorFeeMint ?? null,
         inputTransferFeeRaw: event.inputTransferFeeRaw?.toString() ?? null,
         outputTransferFeeRaw: event.outputTransferFeeRaw?.toString() ?? null,
