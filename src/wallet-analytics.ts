@@ -275,6 +275,8 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>, 
   const creatorBotPnl = calculatePnl(creatorBots);
   return {
     walletCount: wallets.length,
+    pnlMethod: "average_cost_of_observed_swaps; excludes network fees and unobserved wallet transfers or pre-capture inventory",
+    pnlIsCompleteOnlyWhenInventoryCoverageIsComplete: true,
     creatorWallets: creators.map(p => p.wallet),
     launchFeePayerWallets: devFeePayers.map(p => p.wallet),
     developerCandidateWallets: developerCandidates.map(p => ({ wallet: p.wallet, role: p.creator ? "creator" : "launch_fee_payer" })),
