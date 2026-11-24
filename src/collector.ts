@@ -7,7 +7,7 @@ import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
-import { decodeLaunchLabPoolState } from "./pool-state.js";
+import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount, findPumpSwapPoolFromInstructions } from "./pool-state.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
@@ -111,7 +111,7 @@ type TokenMetrics = {
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string;
   launchVerified?: boolean; launchInstruction?: "create" | "create_v2" | "initialize" | "initialize_v2" | "initialize_with_token_2022";
-  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; platformConfig?: string;
+  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
   metrics?: TokenMetrics;
@@ -138,7 +138,7 @@ let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string
   ], quarantinedMints: {}
 };
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
-const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; timer?: NodeJS.Timeout }>();
+const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; ammIds?: number[]; ammPoolAddress?: string; timer?: NodeJS.Timeout }>();
 const activitySignatures = new Map<string, Set<string>>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
 let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
@@ -346,7 +346,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
   // Wait for the bonding-curve account; do not permanently record empty/estimated snapshots.
-  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves") return;
+  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote") return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
@@ -385,6 +385,16 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
   }
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
+  if (item.venue === "pumpfun") {
+    const poolDiscovery = findPumpSwapPoolFromInstructions(transactionInstructions(tx), item.mint);
+    if (poolDiscovery && (!item.quoteMint || item.quoteMint === poolDiscovery.quoteMint)) {
+      if (item.pumpSwapPoolAddress !== poolDiscovery.pool) {
+        item.pumpSwapPoolAddress = poolDiscovery.pool;
+        await persistState();
+      }
+      void subscribePumpSwapPool(item, poolDiscovery.pool);
+    }
+  }
   const solUsd = await getSolUsd();
   const knownQuoteMint = item.quoteMint ?? ensureMetrics(item).quoteMint;
   // Do not guess SOL while the curve account has not yet identified the actual quote asset.
@@ -415,7 +425,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
   const latest = observations[observations.length - 1];
-  if (item.venue === "stonkfun" || metrics.priceSource !== "pump_bonding_curve_virtual_reserves") {
+  if (item.venue === "stonkfun" || (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote")) {
     metrics.firstPriceQuote ??= latest.priceQuote;
     metrics.firstPriceSol ??= latest.priceSol;
     metrics.firstPriceUsd ??= latest.priceUsd;
@@ -454,6 +464,108 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   });
   await recordDueSnapshots(item, Date.now());
   await persistState();
+}
+
+async function recordPumpSwapPoolSnapshot(item: TokenState, poolAddress: string, connection: Connection, slot: number) {
+  const poolInfo = await connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
+  if (!poolInfo || !poolInfo.owner.equals(new PublicKey("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"))) return;
+  const pool = decodePumpSwapPoolState(poolInfo.data);
+  if (!pool || pool.baseMint !== item.mint || (item.quoteMint && pool.quoteMint !== item.quoteMint)) return;
+  const [baseVaultInfo, quoteVaultInfo, quoteDecimals] = await Promise.all([
+    connection.getAccountInfo(new PublicKey(pool.baseVault), "confirmed"),
+    connection.getAccountInfo(new PublicKey(pool.quoteVault), "confirmed"),
+    getMintDecimals(pool.quoteMint)
+  ]);
+  if (!baseVaultInfo || !quoteVaultInfo || quoteDecimals == null || item.supplyDecimals == null) return;
+  const baseRaw = decodeTokenAccountAmount(baseVaultInfo.data, item.mint);
+  const quoteRaw = decodeTokenAccountAmount(quoteVaultInfo.data, pool.quoteMint);
+  if (baseRaw == null || quoteRaw == null || baseRaw <= 0n) return;
+  const effectiveQuoteRaw = quoteRaw + pool.virtualQuoteReservesRaw;
+  if (effectiveQuoteRaw <= 0n) return;
+  const baseAmount = Number(baseRaw) / (10 ** item.supplyDecimals);
+  const quoteAmount = Number(effectiveQuoteRaw) / (10 ** quoteDecimals);
+  const priceQuote = quoteAmount / baseAmount;
+  if (!Number.isFinite(priceQuote) || priceQuote <= 0) return;
+  const isSol = pool.quoteMint === WRAPPED_SOL_MINT;
+  const isStable = pool.quoteMint === USDC_MINT || pool.quoteMint === USDT_MINT;
+  const solUsd = isSol ? await getSolUsd() : null;
+  const quoteUsd = isSol ? solUsd : isStable ? 1 : null;
+  const priceUsd = quoteUsd == null ? null : priceQuote * quoteUsd;
+  const priceSol = isSol ? priceQuote : null;
+  const metrics = ensureMetrics(item);
+  metrics.quoteMint = pool.quoteMint;
+  metrics.quoteDecimals = quoteDecimals;
+  metrics.quoteSymbol = isSol ? "SOL" : pool.quoteMint === USDC_MINT ? "USDC" : pool.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+  metrics.firstPriceQuote ??= priceQuote;
+  metrics.firstPriceSol ??= priceSol;
+  metrics.firstPriceUsd ??= priceUsd;
+  metrics.lastPriceQuote = priceQuote;
+  metrics.lastPriceSol = priceSol;
+  metrics.lastPriceUsd = priceUsd;
+  metrics.lastPriceObservedAt = Date.now();
+  metrics.priceSource = "pumpswap_pool_vault_reserves_plus_virtual_quote";
+  metrics.curveComplete = true;
+  metrics.highPriceQuote = metrics.highPriceQuote == null ? priceQuote : Math.max(metrics.highPriceQuote, priceQuote);
+  metrics.lowPriceQuote = metrics.lowPriceQuote == null ? priceQuote : Math.min(metrics.lowPriceQuote, priceQuote);
+  if (priceUsd != null) {
+    metrics.highPriceUsd = metrics.highPriceUsd == null ? priceUsd : Math.max(metrics.highPriceUsd, priceUsd);
+    metrics.lowPriceUsd = metrics.lowPriceUsd == null ? priceUsd : Math.min(metrics.lowPriceUsd, priceUsd);
+  }
+  const drawdown = metrics.highPriceQuote > 0 ? ((priceQuote / metrics.highPriceQuote) - 1) * 100 : 0;
+  metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
+  const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? priceQuote / metrics.firstPriceQuote : 1;
+  const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+  for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
+    if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
+  }
+  await appendTokenEvent(item.mint, {
+    schemaVersion: 6, kind: "pumpswap_pool_state", mint: item.mint, poolAddress,
+    slot, poolOwner: poolInfo.owner.toBase58(), creator: pool.creator, coinCreator: pool.coinCreator,
+    baseMint: pool.baseMint, quoteMint: pool.quoteMint, lpMint: pool.lpMint,
+    baseVault: pool.baseVault, quoteVault: pool.quoteVault, lpSupplyRaw: pool.lpSupplyRaw.toString(),
+    isMayhemMode: pool.isMayhemMode, isCashbackCoin: pool.isCashbackCoin,
+    virtualQuoteReservesRaw: pool.virtualQuoteReservesRaw.toString(),
+    baseVaultAmountRaw: baseRaw.toString(), quoteVaultAmountRaw: quoteRaw.toString(),
+    effectiveQuoteReservesRaw: effectiveQuoteRaw.toString(),
+    baseVaultAmount: baseAmount, effectiveQuoteReserves: quoteAmount,
+    priceQuote, priceSol, priceUsd, quoteUsd,
+    marketCapQuote: marketCap(priceQuote, item.supplyUi ?? null),
+    marketCapSol: marketCap(priceSol, item.supplyUi ?? null),
+    marketCapUsd: marketCap(priceUsd, item.supplyUi ?? null),
+    pricingMethod: "pumpswap_pool_vault_reserves_plus_virtual_quote",
+    executionQuote: false, note: "Reserve-ratio spot reference; actual fill differs due to AMM fees, slippage and route costs."
+  });
+  await recordDueSnapshots(item, Date.now());
+  await persistState();
+}
+
+async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
+  const sub = activeSubscriptions.get(item.mint);
+  if (!sub || sub.ammPoolAddress === poolAddress) return;
+  if (sub.ammIds) {
+    for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
+  }
+  sub.ammIds = [];
+  sub.ammPoolAddress = poolAddress;
+  const refresh = (slot: number) => {
+    void recordPumpSwapPoolSnapshot(item, poolAddress, sub.connection, slot).catch(error =>
+      console.warn("PumpSwap pool snapshot failed:", item.mint, String(error).slice(0, 160))
+    );
+  };
+  try {
+    const poolInfo = await sub.connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
+    if (!poolInfo) return;
+    const pool = decodePumpSwapPoolState(poolInfo.data);
+    if (!pool || pool.baseMint !== item.mint || (item.quoteMint && pool.quoteMint !== item.quoteMint)) return;
+    const poolId = await sub.connection.onAccountChange(new PublicKey(poolAddress), (_info, context) => refresh(context.slot), "confirmed");
+    const baseVaultId = await sub.connection.onAccountChange(new PublicKey(pool.baseVault), (_info, context) => refresh(context.slot), "confirmed");
+    const quoteVaultId = await sub.connection.onAccountChange(new PublicKey(pool.quoteVault), (_info, context) => refresh(context.slot), "confirmed");
+    sub.ammIds = [poolId, baseVaultId, quoteVaultId];
+    refresh(0);
+    console.log("PumpSwap post-graduation pool tracking started:", item.mint, poolAddress);
+  } catch (error) {
+    console.warn("Could not subscribe to PumpSwap pool:", item.mint, String(error).slice(0, 160));
+  }
 }
 
 async function retryPendingActivityTransactions() {
@@ -774,7 +886,7 @@ async function stopCapture(mint: string) {
   if (sub) {
     if (sub.timer) clearInterval(sub.timer);
     try { await sub.connection.removeOnLogsListener(sub.id); } catch {}
-    if (sub.curveId != null) { try { await sub.connection.removeAccountChangeListener(sub.curveId); } catch {} }
+    if (sub.curveId != null) { try { await sub.connection.removeAccountChangeListener(sub.curveId); } catch {} }\n    if (sub.ammIds) for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
     activeSubscriptions.delete(mint);
   }
 }
