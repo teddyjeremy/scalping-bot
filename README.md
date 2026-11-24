@@ -6,18 +6,18 @@ This repository contains the first-stage **research data collector**. It does no
 
 - Watches the Pump program for likely create instructions.
 - Fetches confirmed launch transactions through Helius.
-- Detects newly created mints from transaction token-balance metadata.
+- Identifies Pump `create` / `create_v2` transactions from Pump program logs and takes the mint from the first account in the official Pump instruction layout; verifies the account is owned by SPL Token or Token-2022. It does not infer a launch mint from token-balance deltas.
 - Creates one folder per mint: `data/tokens/<MINT>/events.jsonl`.
 - Captures transactions mentioning that mint for up to the configured first 10 minutes.
-- Stores creator (launch transaction fee payer), signature, slot, logs, account keys, SOL/token balance changes and inner instructions.
-- Persists a local state file so active token subscriptions can be restored after a process restart **when the same persistent disk is retained**.
+- Stores the launch transaction fee payer separately. Creator identity is left null until decoded from authoritative launch-event data; fee payer is not silently labelled as creator.
+- Persists state and a remote Hugging Face checkpoint, restores active token event files, and saves a Pump-program signature cursor. On later runs it reconciles missed program transactions in bounded pages and saves its page cursor so reconciliation can resume.
 - Rotates transaction-fetch requests across up to three Helius API keys.
 
 ## Important limitations of this first cut
 
 1. This is a live collector, not the November 1–23 historical backfill. Historical discovery/backfill is a separate job and must page through archived program activity.
-2. A process restart can restore active subscriptions from the state file, but it cannot recover transactions missed while offline yet. A checkpointed backfill/reconciliation worker is required before calling collection restart-safe.
-3. Pump program log matching and token-mint extraction are initial heuristics. Validate against known launch transactions and add the current Pump IDL decoder before using the dataset for strategy conclusions.
+2. Reconciliation recovers missed Pump launch detections after the first checkpoint, in bounded batches. It is not a full historical first-10-minute trade backfill for launches whose capture window expired while the collector was offline. The November 1–23 archive backfill remains a separate unfinished job.
+3. Launch detection now uses the Pump create/create_v2 instruction layout and token-program ownership validation. Continue validating against known launch signatures before using the dataset for strategy conclusions.
 4. The first-10-minute capture is bounded from the launch transaction timestamp. Delayed indexing can mean a few seconds of initial activity are missed.
 5. A mint subscription is not a complete universal trade feed for every venue. Add PumpSwap/Raydium/Orca pool subscriptions and pool-specific decoders as the next step.
 6. The collector records raw evidence. It does not yet label snipers/insiders or assert wallet relationships. Those require transaction-graph analysis and cautious heuristics.
@@ -50,14 +50,14 @@ Each JSONL line is an independent event, so partial files survive normal process
 
 ## Free Hugging Face dataset storage
 
-The collector can upload changed token JSONL files in batches every 30 seconds to a Hugging Face dataset repository. It uses the official `@huggingface/hub` JavaScript client. The local `data/` directory remains the working buffer and checkpoint store; Hugging Face receives snapshots of each token's event file.
+The collector uploads changed token JSONL files and its checkpoint in batches every 30 seconds to a Hugging Face dataset repository. Failed uploads are retained for the next scheduled retry; they do not trigger an unbounded immediate retry loop. Remote checkpoints are schema-validated before they can replace local state.
 
 1. Create a Hugging Face access token with **Write** permission at https://huggingface.co/settings/tokens.
 2. Set `HF_TOKEN` in your local `.env` and set `HF_DATASET_REPO=ndeda/solana-scalping-data`.
 3. Keep `.env` private and never commit the token.
 4. Run `npm install`, `npm run typecheck`, then `npm run dev`.
 
-Uploads are retried on later batches after failures. The collector must remain running and have internet access. This does not make the collector a 24/7 hosted service: on a free setup, run it on your laptop. The local `data/` directory must be backed up because Hugging Face is the remote dataset copy, not the live collector's restart checkpoint.
+Uploads are retried on later batches after failures. The collector must remain running and have internet access. This does not make the collector a 24/7 hosted service: on a free setup, run it on your laptop. Hugging Face stores the remote restart checkpoint and token event snapshots. GitHub-hosted runners are ephemeral, so the remote checkpoint and event snapshots are restored at the start of each run.
 
 The dataset is currently configured as `ndeda/solana-scalping-data`. Upload paths use `raw/pumpfun/<MINT>/events.jsonl`. Do not upload `.env`, API keys, or wallet signing secrets.
 
