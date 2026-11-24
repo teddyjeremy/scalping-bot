@@ -24,6 +24,7 @@ launch_rows = []
 summary_rows = []
 trade_rows = []
 failed_rows = []
+raw_event_keys = {}
 
 for path in sorted((ROOT / "launches").glob("*/*.json")):
     if path.name.endswith(".summary.json"):
@@ -78,6 +79,16 @@ for path in sorted((ROOT / "trades").glob("*/*/*.jsonl")):
                 "raw_json": json.dumps(row, separators=(",", ":"), ensure_ascii=False),
             }
             if row.get("recordType") == "historical_trade_event":
+                signature = str(row.get("signature") or "")
+                user = str(row.get("user") or "")
+                side = row.get("side")
+                quote_mint = str(row.get("quoteMint") or "")
+                token_raw = int(row.get("tokenAmountRaw") or 0)
+                quote_raw = int(row.get("quoteAmountRaw") or 0)
+                if signature and user and side in ("buy", "sell") and quote_mint and token_raw > 0 and quote_raw > 0:
+                    key = (row.get("venue"), row.get("mint"))
+                    dedupe = (signature, row.get("eventIndex", 0), user, side, token_raw, quote_raw, quote_mint)
+                    raw_event_keys.setdefault(key, set()).add(dedupe)
                 trade_rows.append({
                     **base, "side": row.get("side"), "user": row.get("user"),
                     "quoteMint": row.get("quoteMint"),
@@ -94,6 +105,19 @@ for path in sorted((ROOT / "trades").glob("*/*/*.jsonl")):
                 })
             elif row.get("recordType") == "historical_failed_transaction":
                 failed_rows.append(base)
+
+summary_by_key = {(row.get('venue'), row.get('mint')): row for row in summary_rows}
+for key, summary in summary_by_key.items():
+    raw_summary = json.loads(summary['raw_json'])
+    if 'capture' not in raw_summary:
+        summary['summaryConsistent'] = False
+        continue
+    actual_count = len(raw_event_keys.get(key, set()))
+    summary['summaryConsistent'] = actual_count == summary['tradeEventCount']
+    if not summary['summaryConsistent']:
+        raise RuntimeError(
+            f"Trade summary mismatch for {key}: summary={summary['tradeEventCount']}, raw_unique_events={actual_count}. Refusing to publish inconsistent Parquet exports."
+        )
 
 def write(name, rows, schema):
     table = pa.Table.from_pylist(rows, schema=schema)
@@ -120,6 +144,7 @@ write("launch_summaries.parquet", summary_rows, pa.schema([
     pa.field("sellCount", pa.int64()), pa.field("uniqueBuyers", pa.int64()),
     pa.field("uniqueSellers", pa.int64()), pa.field("sourcePageCount", pa.int64()),
     pa.field("captureComplete", pa.bool_()), pa.field("capturedSourcePages", pa.int64()),
+    pa.field("summaryConsistent", pa.bool_()),
     pa.field("historicalUsdPrice", pa.bool_()), pa.field("historicalFdv", pa.bool_()),
     pa.field("historicalHolderSnapshots", pa.bool_()), pa.field("raw_json", pa.string()),
 ]))
