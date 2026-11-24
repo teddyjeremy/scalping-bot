@@ -180,6 +180,6 @@ The historical backfill is a separate research pipeline. It is not an AI trading
 - Builds per-token research summaries with developer/launch-fee-payer activity, wallet cohorts, sniper/bot/bundle candidates, buy/sell pressure, quote-denominated price paths, returns and drawdown.
 - Stores raw page files and cursor checkpoints locally during a run, restores the archive from the Hugging Face dataset, and uploads progress after each run. The workflow also runs hourly until the date-range and per-token cursors are complete.
 
-Historical labels such as bot, sniper and bundle are **heuristic candidates**, not proof of automation or common ownership. Historical USD prices, complete holder snapshots and exact historical total supply are not fabricated. A valuation based on launch-transaction token balances is explicitly marked as potentially partial; it must not be treated as verified FDV or circulating market capitalization.
+Historical labels such as bot, sniper and bundle are **heuristic candidates**, not proof of automation or common ownership. Historical USD prices, complete holder snapshots and exact historical total supply are not fabricated. Launch-transaction touched token-account balances are retained as raw evidence but are not treated as total supply or used to calculate market capitalization.
 
 The collector's purpose is to build a reliable dataset. Complex entry/exit rules are a later research and backtesting task, derived from the collected evidence.
