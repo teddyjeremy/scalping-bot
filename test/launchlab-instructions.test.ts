@@ -28,5 +28,5 @@ test("detects StonkFun initialize_with_token_2022 by program, discriminator and 
     { programId: launchLab, data, accounts: ["payer", "creator", "global", "other-config", "authority", pool, "other-mint", quote] },
     { programId: "another-program", data, accounts: ["payer", "creator", "global", stonkConfig, "authority", pool, "wrong-mint", quote] }
   ], launchLab, new Set([stonkConfig]));
-  assert.deepEqual(result, [{ mint, quoteMint: quote, pool, platformConfig: stonkConfig, kind: "initialize_with_token_2022" }]);
+  assert.deepEqual(result, [{ payer: "payer", creator: "creator", mint, quoteMint: quote, pool, platformConfig: stonkConfig, kind: "initialize_with_token_2022" }]);
 });
