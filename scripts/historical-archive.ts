@@ -111,11 +111,16 @@ type MintTradeCursor = { before?: string; complete: boolean; pages: number; sour
 type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
+let saveQueue: Promise<void> = Promise.resolve();
 async function save() {
-  await mkdir(ROOT, { recursive: true });
-  const temp = cursorPath + ".tmp";
-  await writeFile(temp, JSON.stringify(state, null, 2));
-  await rename(temp, cursorPath);
+  const write = saveQueue.then(async () => {
+    await mkdir(ROOT, { recursive: true });
+    const temp = cursorPath + ".tmp";
+    await writeFile(temp, JSON.stringify(state, null, 2));
+    await rename(temp, cursorPath);
+  });
+  saveQueue = write.catch(() => undefined);
+  await write;
 }
 async function load() {
   await mkdir(ROOT, { recursive: true });
@@ -451,13 +456,18 @@ async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
   await load();
   console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission.`);
-  await scanProgram(PUMP, "pumpfun");
-  await scanProgram(LAUNCHLAB, "stonkfun");
-  for (const record of Object.values(state.launches)) {
-    if (state.tradeCursors?.[record.mint]?.complete) continue;
-    await collectMintTrades(record);
-    if (state.tradeCursors?.[record.mint]?.complete) await buildMintResearchSummary(record);
-  }
+  await Promise.all([scanProgram(PUMP, "pumpfun"), scanProgram(LAUNCHLAB, "stonkfun")]);
+  const records = Object.values(state.launches);
+  let nextRecord = 0;
+  const workerCount = Math.min(3, records.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextRecord < records.length) {
+      const record = records[nextRecord++];
+      if (state.tradeCursors?.[record.mint]?.complete) continue;
+      await collectMintTrades(record);
+      if (state.tradeCursors?.[record.mint]?.complete) await buildMintResearchSummary(record);
+    }
+  }));
   console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete])))}`);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
