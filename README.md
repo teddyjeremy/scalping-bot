@@ -165,3 +165,21 @@ Required GitHub **Actions repository secrets**:
 - `HELIUS_API_KEY_2` and `HELIUS_API_KEY_3` (optional additional RPC rotation)
 
 GitHub-hosted jobs have a six-hour maximum execution time. Scheduled starts can be delayed, so this is repeated bounded collection, not guaranteed uninterrupted 24/7 streaming. Events occurring during the gap between runs can be missed; remote checkpoints preserve state, and stored-signature replay recovers only transactions already recorded or found in the bounded per-mint fallback. It does not replace the November 1–23 archive backfill.
+
+
+## Historical research archive
+
+The historical backfill is a separate research pipeline. It is not an AI trading bot and it does not submit orders.
+
+- Default window: November 1–23, 2026 UTC (end date is exclusive: November 24).
+- Venues: Pump.fun and StonkFun / Raydium LaunchLab.
+- Uses Helius `getTransactionsForAddress` with ascending time filters and pagination when available; otherwise falls back to standard Solana RPC signature and transaction calls.
+- Uses three paced Helius connections with per-key queues, rate-limit cooldowns and failover.
+- Archives launch transactions, the first ten minutes of available mint/curve/pool transactions, decoded trades, fee fields, funding links and transaction failures.
+- Discovers PumpSwap and LaunchLab-to-CPMM migrated pools from observed instructions and persists those addresses in resumable checkpoints.
+- Builds per-token research summaries with developer/launch-fee-payer activity, wallet cohorts, sniper/bot/bundle candidates, buy/sell pressure, quote-denominated price paths, returns and drawdown.
+- Stores raw page files and cursor checkpoints locally during a run, restores the archive from the Hugging Face dataset, and uploads progress after each run. The workflow also runs hourly until the date-range and per-token cursors are complete.
+
+Historical labels such as bot, sniper and bundle are **heuristic candidates**, not proof of automation or common ownership. Historical USD prices, complete holder snapshots and exact historical total supply are not fabricated. A valuation based on launch-transaction token balances is explicitly marked as potentially partial; it must not be treated as verified FDV or circulating market capitalization.
+
+The collector's purpose is to build a reliable dataset. Complex entry/exit rules are a later research and backtesting task, derived from the collected evidence.
