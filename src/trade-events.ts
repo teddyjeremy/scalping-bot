@@ -125,7 +125,7 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
   try {
     const r = new Reader(data); r.offset = 8;
     const timestamp = Number(r.i64()); const tokenAmountRaw = r.u64(); r.u64();
-    r.u64(); r.u64(); r.u64(); r.u64();
+    r.u64(); r.u64(); const poolBaseAfter = r.u64(); const poolQuoteAfter = r.u64();
     const poolQuoteAmountRaw = r.u64(); const lpFeeBps = r.u64(); const lpFeeRaw = r.u64();
     const protocolFeeBps = r.u64(); const protocolFeeRaw = r.u64(); r.u64();
     const userQuoteAmountRaw = r.u64(); const pool = r.key(); const user = r.key();
@@ -148,7 +148,7 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
       instructionName, pool, creator: creator === ZERO_KEY ? null : creator, feeRecipient: null,
       virtualQuoteReservesRaw, realQuoteReservesRaw: null,
       preTradeBaseReserveRaw: side === "buy" ? poolBaseAfter + tokenAmountRaw : poolBaseAfter > tokenAmountRaw ? poolBaseAfter - tokenAmountRaw : 0n,
-      preTradeQuoteReserveRaw: side === "buy" ? (virtualQuoteReservesRaw ?? poolQuoteAfter) > (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) ? (virtualQuoteReservesRaw ?? poolQuoteAfter) - (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) : 0n : (virtualQuoteReservesRaw ?? poolQuoteAfter) + (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw)
+      preTradeQuoteReserveRaw: side === "buy" ? poolQuoteAfter > (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) ? poolQuoteAfter - (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) : 0n : poolQuoteAfter + (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw)
     };
   } catch { return null; }
 }
