@@ -14,7 +14,7 @@ on:
         default: "2026-11-24"
         type: string
       max_pages:
-        description: "Maximum 100-signature pages per program/mint in this run"
+        description: "Maximum 100-signature pages per address per run"
         required: true
         default: "20"
         type: string
@@ -45,8 +45,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Restore resumable historical archive workspace
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: historical-data
           key: historical-archive-${{ github.run_id }}-${{ github.run_attempt }}
@@ -69,6 +68,14 @@ jobs:
           PY
       - name: Install dependencies
         run: npm ci
+      - name: Install Hugging Face client
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Restore previous archive and checkpoint from Hugging Face
+        run: python scripts/hf-dataset-sync.py restore
+      - name: Verify Hugging Face dataset write access and clean up test file
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python scripts/hf-dataset-sync.py write-test
       - name: Typecheck application and historical scanner
         run: |
           npm run typecheck
@@ -77,17 +84,9 @@ jobs:
         run: npm test
       - name: Scan historical launches and first ten minutes of trades
         run: npm run historical:archive
-      - name: Install Hugging Face CLI
-        if: always()
-        run: python -m pip install --upgrade huggingface_hub
       - name: Upload resumable archive to Hugging Face dataset
         if: always()
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          if [ -d historical-data ]; then
-            hf upload ndeda/solana-scalping-data historical-data historical --repo-type dataset --token "$HF_TOKEN"
-          fi
+        run: python scripts/hf-dataset-sync.py upload
       - name: Preserve run output as artifact
         if: always()
         uses: actions/upload-artifact@v4
