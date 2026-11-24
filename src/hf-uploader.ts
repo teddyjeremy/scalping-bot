@@ -31,6 +31,25 @@ export async function restoreCollectorState(localPath: string) {
   }
 }
 
+export async function restoreTokenEvents(mints: string[]) {
+  if (!token || mints.length === 0) return;
+  await Promise.all(mints.map(async mint => {
+    const localPath = path.join(dataDir, "tokens", mint, "events.jsonl");
+    try {
+      const response = await fetch(`https://huggingface.co/datasets/${repoName}/resolve/main/raw/pumpfun/${mint}/events.jsonl`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000)
+      });
+      if (response.status === 404) return;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await mkdir(path.dirname(localPath), { recursive: true });
+      await writeFile(localPath, Buffer.from(await response.arrayBuffer()));
+    } catch (error) {
+      console.error("Could not restore event file for", mint, String(error).slice(0, 160));
+    }
+  }));
+}
+
 export async function flushHuggingFaceUploads() {
   if (!token) {
     if (!warnedMissingToken) { console.warn("HF_TOKEN is not set; dataset uploads are disabled."); warnedMissingToken = true; }
