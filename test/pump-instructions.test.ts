@@ -42,13 +42,22 @@ test("recognizes the legacy create discriminator", () => {
   );
 });
 
-test("extracts the creator account separately from the transaction fee payer", () => {
+test("extracts the legacy create creator from account index 7", () => {
   const data = encodeBase58(Uint8Array.from([24, 30, 200, 40, 5, 28, 7, 119, 0]));
+  const creator = "Creator111111111111111111111111111111111";
+  const result = findPumpCreateInstructions([
+    { programId: pump, data, accounts: [mint, "authority", "curve", "associated-curve", "global", "metadata-program", "metadata", creator] }
+  ], pump);
+  assert.deepEqual(result, [{ mint, creator, kind: "create" }]);
+});
+
+test("extracts the create_v2 creator from account index 5", () => {
+  const data = encodeBase58(Uint8Array.from([214, 144, 76, 236, 95, 139, 49, 180, 0]));
   const creator = "Creator111111111111111111111111111111111";
   const result = findPumpCreateInstructions([
     { programId: pump, data, accounts: [mint, "authority", "curve", "associated-curve", "global", creator] }
   ], pump);
-  assert.deepEqual(result, [{ mint, creator, kind: "create" }]);
+  assert.deepEqual(result, [{ mint, creator, kind: "create_v2" }]);
 });
 
 test("does not mistake associated-token Create logs or Pump buys for launch instructions", () => {
