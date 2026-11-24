@@ -136,11 +136,13 @@ type PumpCurveState = {
   realTokenRaw: bigint; realSolLamports: bigint; totalSupplyRaw: bigint;
   creatorFeeBps: bigint | null; isHolderReward: boolean | null;
   creatorFeeAccruedRaw: bigint | null; protocolFeesAccruedRaw: bigint | null;
-  isMayhemMode: boolean | null; isCashbackCoin: boolean | null;\n  canEditCreatorFee: boolean | null; curveDepth: number | null; initialVirtualQuoteReservesRaw: bigint | null;\n  postCompleteBaseOutRaw: bigint | null; postCompleteQuoteInRaw: bigint | null;
+  isMayhemMode: boolean | null; isCashbackCoin: boolean | null;
+  canEditCreatorFee: boolean | null; curveDepth: number | null; initialVirtualQuoteReservesRaw: bigint | null;
+  postCompleteBaseOutRaw: bigint | null; postCompleteQuoteInRaw: bigint | null;
 };
 function decodePumpCurve(data: Buffer): PumpCurveState | null {
   // Anchor account: discriminator + five u64 reserves/supply + bool + creator.
-  if (data.length < 49) return null;
+  if (data.length < 49 || !data.subarray(0, 8).equals(Buffer.from([23, 183, 248, 55, 96, 216, 172, 96]))) return null;
   const zero = new PublicKey(Buffer.alloc(32)).toBase58();
   const creator = data.length >= 81 ? new PublicKey(data.subarray(49, 81)).toBase58() : null;
   // Current extended layout appends mayhem/cashback flags, then quote_mint.
@@ -159,7 +161,12 @@ function decodePumpCurve(data: Buffer): PumpCurveState | null {
     creatorFeeBps: data.length >= 123 ? data.readBigUInt64LE(115) : null,
     isHolderReward: data.length >= 125 ? data[124] === 1 : null,
     creatorFeeAccruedRaw: data.length >= 133 ? data.readBigUInt64LE(125) : null,
-    protocolFeesAccruedRaw: data.length >= 141 ? data.readBigUInt64LE(133) : null
+    protocolFeesAccruedRaw: data.length >= 141 ? data.readBigUInt64LE(133) : null,
+    canEditCreatorFee: data.length >= 124 ? data[123] === 1 : null,
+    curveDepth: data.length >= 142 ? data[141] : null,
+    initialVirtualQuoteReservesRaw: data.length >= 150 ? data.readBigUInt64LE(142) : null,
+    postCompleteBaseOutRaw: data.length >= 158 ? data.readBigUInt64LE(150) : null,
+    postCompleteQuoteInRaw: data.length >= 166 ? data.readBigUInt64LE(158) : null
   };
 }
 async function processCurveState(item: TokenState, data: Buffer, slot: number) {
@@ -220,7 +227,9 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, observedAt: Date.now(),
     creator: curve.creator, quoteMint, quoteSymbol, quoteDecimals, complete: curve.complete,
     isMayhemMode: curve.isMayhemMode, isCashbackCoin: curve.isCashbackCoin,
-    isHolderReward: curve.isHolderReward,
+    isHolderReward: curve.isHolderReward, canEditCreatorFee: curve.canEditCreatorFee, curveDepth: curve.curveDepth,
+    initialVirtualQuoteReservesRaw: curve.initialVirtualQuoteReservesRaw?.toString() ?? null,
+    postCompleteBaseOutRaw: curve.postCompleteBaseOutRaw?.toString() ?? null, postCompleteQuoteInRaw: curve.postCompleteQuoteInRaw?.toString() ?? null,
     creatorFeeBps: curve.creatorFeeBps?.toString() ?? null,
     creatorFeeAccruedRaw: curve.creatorFeeAccruedRaw?.toString() ?? null,
     protocolFeesAccruedRaw: curve.protocolFeesAccruedRaw?.toString() ?? null,
