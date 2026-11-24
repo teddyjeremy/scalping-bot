@@ -318,7 +318,8 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           if (discovered && !addresses.includes(discovered)) addresses.push(discovered);
         }
         const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, txInstructions);
-        for (const event of decoded) {
+        for (let eventIndex = 0; eventIndex < decoded.length; eventIndex++) {
+          const event = decoded[eventIndex];
           const tokenDecimals = tx.meta.preTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals
             ?? tx.meta.postTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? null;
           const quoteDecimals = event.quoteMint === "So11111111111111111111111111111111111111112" ? 9
@@ -327,7 +328,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           lines.push(JSON.stringify({
             schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
             launchSignature: record.signature, signature: item.signature, sourceAddress: address,
-            slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
+            slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, eventIndex,
             eventTimestamp: event.timestamp, side: event.side, user: event.user,
             creator: record.creator, launchFeePayer: record.feePayer, launchSlot: record.slot, launchTime: record.blockTime,
             transactionFeePayer: signers(tx)[0] ?? null, fundingSources: extractFundingSources(tx, event.user),
@@ -391,7 +392,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       const quoteMint = String(event.quoteMint ?? "");
       const tokenRaw = BigInt(String(event.tokenAmountRaw ?? "0"));
       const quoteRaw = BigInt(String(event.quoteAmountRaw ?? "0"));
-      const dedupe = [signature, user, side, tokenRaw.toString(), quoteRaw.toString(), quoteMint].join(":");
+      const dedupe = [signature, event.eventIndex ?? 0, user, side, tokenRaw.toString(), quoteRaw.toString(), quoteMint].join(":");
       if (!signature || !user || !side || !quoteMint || tokenRaw <= 0n || quoteRaw <= 0n) continue;
       if (seen.has(dedupe)) { duplicateEvents++; continue; }
       seen.add(dedupe);
