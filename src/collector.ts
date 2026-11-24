@@ -36,6 +36,7 @@ type TokenMetrics = {
   firstPriceSol: number | null; firstPriceUsd: number | null;
   lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
   highPriceUsd: number | null; lowPriceUsd: number | null;
+  highPriceQuote?: number | null; lowPriceQuote?: number | null;
   snapshotsRecorded: number[];
   maxDrawdownPct: number | null;
   timeToTargetsSeconds: Record<string, number | null>;
@@ -121,7 +122,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   const metrics = item.metrics ??= {
     tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0, volumeQuote: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
-    lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null,
+    lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null, highPriceQuote: null, lowPriceQuote: null,
     snapshotsRecorded: [], maxDrawdownPct: null,
     timeToTargetsSeconds: { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null },
     largestBuySol: 0, largestSellSol: 0, largestBuyQuote: 0, largestSellQuote: 0
@@ -212,7 +213,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     metrics.firstPriceSol = priceSol; metrics.firstPriceUsd = priceUsd; metrics.firstPriceQuote = priceQuote;
     metrics.quoteMint = quoteMint; metrics.quoteSymbol = quoteSymbol; metrics.quoteDecimals = quoteDecimals;
     metrics.timeToTargetsSeconds = { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
-    metrics.highPriceUsd = priceUsd; metrics.lowPriceUsd = priceUsd; metrics.maxDrawdownPct = null;
+    metrics.highPriceUsd = priceUsd; metrics.lowPriceUsd = priceUsd; metrics.highPriceQuote = priceQuote; metrics.lowPriceQuote = priceQuote; metrics.maxDrawdownPct = null;
   }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
   metrics.lastPriceSol = priceSol; metrics.lastPriceUsd = priceUsd; metrics.lastPriceQuote = priceQuote;
@@ -226,13 +227,16 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   if (priceUsd != null) {
     metrics.highPriceUsd = metrics.highPriceUsd == null ? priceUsd : Math.max(metrics.highPriceUsd, priceUsd);
     metrics.lowPriceUsd = metrics.lowPriceUsd == null ? priceUsd : Math.min(metrics.lowPriceUsd, priceUsd);
-    const drawdown = metrics.highPriceUsd > 0 ? ((priceUsd / metrics.highPriceUsd) - 1) * 100 : 0;
-    metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
-    const multiple = metrics.firstPriceUsd && metrics.firstPriceUsd > 0 ? priceUsd / metrics.firstPriceUsd : 1;
-    const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
-    for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
-      if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
-    }
+  }
+  // Percentage drawdown and multiples are quote-currency invariant, so custom SPL pairs are measured too.
+  metrics.highPriceQuote = metrics.highPriceQuote == null ? priceQuote : Math.max(metrics.highPriceQuote, priceQuote);
+  metrics.lowPriceQuote = metrics.lowPriceQuote == null ? priceQuote : Math.min(metrics.lowPriceQuote, priceQuote);
+  const drawdown = metrics.highPriceQuote > 0 ? ((priceQuote / metrics.highPriceQuote) - 1) * 100 : 0;
+  metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
+  const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? priceQuote / metrics.firstPriceQuote : 1;
+  const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+  for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
+    if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
   }
   if (curve.creator && item.creator !== curve.creator) { item.creator = curve.creator; await persistState(); }
   await appendTokenEvent(item.mint, {
@@ -262,7 +266,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     feeRateSource: curve.isHolderReward ? "holder_rewards_rate_not_yet_decoded" : isSol || isUsdc ? "published_sol_usdc_bonding_curve_schedule" : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate" : "published_custom_pair_schedule",
     feeIsEstimateNotExecution: true,
     creatorFeeMayBeOverriddenByHolderRewards: true,
-    realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
+    realTokenReservesUi: realToken, highPriceQuote: metrics.highPriceQuote, lowPriceQuote: metrics.lowPriceQuote, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
   await recordDueSnapshots(item, Date.now());
