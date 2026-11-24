@@ -2,10 +2,6 @@ name: StonkFun pool launch verification probe
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "scripts/stonkfun-pool-verify-probe.mjs"
-      - ".github/workflows/stonkfun-pool-verify-probe.yml"
 
 permissions:
   contents: read
