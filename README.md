@@ -54,9 +54,9 @@ The collector validates Pump launches using the exact top-level instruction disc
 
 The Hugging Face dataset includes `quality/data-quality-manifest.json`. Consumers must exclude every mint listed under `quarantinedMints`. When a bad directory is identified, its original JSONL is copied to `quarantine/pumpfun/<MINT>/events.jsonl` and the original `raw/pumpfun/<MINT>/events.jsonl` path is replaced by an exclusion marker. The original bytes are retained for audit rather than silently deleted. The previously stored wrapped-SOL directory is explicitly quarantined because its recorded "launch" transaction is a Pump buy instruction, not a token creation. On startup, existing checkpoint entries are revalidated against their launch signatures before subscriptions resume. A transaction that cannot be fetched remains pending verification and is not used for collection.
 
-Transaction fetches are serialized and rate-limited across configured Helius keys, with exponential backoff on HTTP 429 and signature-level deduplication. This protects the provider quota; if incoming activity exceeds the configured request budget, delayed transaction enrichment is possible and should be monitored.
+Transaction fetches are serialized and rate-limited across configured Helius keys, with exponential backoff on HTTP 429 and signature-level deduplication. If activity enrichment fails or the quote mint is not known yet, the signature is checkpointed and retried. On collector restart, the most recent 100 signatures per still-active mint are checked to recover part of the missed first-ten-minute activity window. This protects the provider quota; if incoming activity exceeds the configured request budget, delayed transaction enrichment is possible and should be monitored.
 
-Run `npm test` to check the strict Pump and StonkFun launch decoders and their false-positive cases. The CI workflow publishes its preflight result to `quality/ci-status.json` in the Hugging Face dataset.
+Run `npm test` to check the strict Pump and StonkFun launch decoders and their false-positive cases. Hugging Face writes are batched every two minutes to stay below the free repository commit-rate limit; failed batches remain dirty and retry on the next interval.
 
 ## Setup
 
