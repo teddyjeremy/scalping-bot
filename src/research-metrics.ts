@@ -85,8 +85,8 @@ export function calculatePricePathMetrics(points: PricePoint[]) {
     targetHitTimesSeconds,
     drawdownHitTimesSeconds,
     realizedVolatilityPctPerObservation: variance == null ? null : Math.sqrt(variance) * 100,
-    largestSingleStepUpPct: logReturns.length ? Math.max(...logReturns.map(value => (Math.exp(value) - 1) * 100)) : null,
-    largestSingleStepDownPct: logReturns.length ? Math.min(...logReturns.map(value => (Math.exp(value) - 1) * 100)) : null,
+    largestSingleStepUpPct: logReturns.length ? logReturns.reduce((best, value) => Math.max(best, (Math.exp(value) - 1) * 100), -Infinity) : null,
+    largestSingleStepDownPct: logReturns.length ? logReturns.reduce((worst, value) => Math.min(worst, (Math.exp(value) - 1) * 100), Infinity) : null,
     priceSeriesIsSparseOrIrregular: series.length < 2 || series.some((point, i) => i > 0 && point.at - series[i - 1]!.at > 15_000)
   };
 }
