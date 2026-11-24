@@ -280,7 +280,8 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   for (let sourceIndex = 0; sourceIndex < addresses.length; sourceIndex++) {
     const address = addresses[sourceIndex];
     const source: TradeSourceCursor = progress.sources[address] ?? { complete: false, pages: 0 };
-    while (!source.complete && source.pages < MAX_PAGES) {
+    let pagesThisRun = 0;
+    while (!source.complete && pagesThisRun < MAX_PAGES) {
       const enhanced = await getHeliusHistoryPage(address, record.blockTime, until, source.paginationToken);
       let hydrated: Array<{ item: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
       let reachedLaunchBoundary = false;
@@ -347,6 +348,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       const pageFile = path.join(directory, `source-${sourceIndex}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
       await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
       source.pages++;
+      pagesThisRun++;
       if (!enhanced && (reachedLaunchBoundary || hydrated.length < 100)) source.complete = true;
       progress.sources[address] = source;
       progress.pages = Object.values(progress.sources).reduce<number>((sum, item) => sum + item.pages, 0);
