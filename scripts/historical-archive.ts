@@ -363,7 +363,6 @@ async function verifyAndPersistStonkFunLaunch(row: LaunchLabIndexRow, platformCo
     const signatures = await rpc("getSignaturesForAddress(StonkFun mint)", connection =>
       connection.getSignaturesForAddress(new PublicKey(mint), {
         limit: 1000,
-        commitment: "confirmed",
         ...(before ? { before } : {})
       }, "confirmed")
     );
