@@ -25,6 +25,7 @@ summary_rows = []
 trade_rows = []
 failed_rows = []
 raw_event_keys = {}
+failed_keys = set()
 
 for path in sorted((ROOT / "launches").glob("*/*.json")):
     if path.name.endswith(".summary.json"):
@@ -85,10 +86,15 @@ for path in sorted((ROOT / "trades").glob("*/*/*.jsonl")):
                 quote_mint = str(row.get("quoteMint") or "")
                 token_raw = int(row.get("tokenAmountRaw") or 0)
                 quote_raw = int(row.get("quoteAmountRaw") or 0)
+                duplicate = False
                 if signature and user and side in ("buy", "sell") and quote_mint and token_raw > 0 and quote_raw > 0:
                     key = (row.get("venue"), row.get("mint"))
-                    dedupe = (signature, row.get("eventIndex", 0), user, side, token_raw, quote_raw, quote_mint)
-                    raw_event_keys.setdefault(key, set()).add(dedupe)
+                    dedupe = (signature, row.get("eventIndex") or 0, user, side, token_raw, quote_raw, quote_mint)
+                    seen = raw_event_keys.setdefault(key, set())
+                    duplicate = dedupe in seen
+                    seen.add(dedupe)
+                if duplicate:
+                    continue
                 trade_rows.append({
                     **base, "side": row.get("side"), "user": row.get("user"),
                     "quoteMint": row.get("quoteMint"),
@@ -104,7 +110,10 @@ for path in sorted((ROOT / "trades").glob("*/*/*.jsonl")):
                     "impliedQuotePrice": row.get("impliedQuotePrice"),
                 })
             elif row.get("recordType") == "historical_failed_transaction":
-                failed_rows.append(base)
+                failed_key = (row.get("venue"), row.get("mint"), row.get("signature"))
+                if failed_key not in failed_keys:
+                    failed_keys.add(failed_key)
+                    failed_rows.append(base)
 
 summary_by_key = {(row.get('venue'), row.get('mint')): row for row in summary_rows}
 for key, summary in summary_by_key.items():
