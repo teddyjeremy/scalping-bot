@@ -1306,6 +1306,20 @@ async function backfillActiveMintActivity(item: TokenState) {
 }
 
 type HistoricalSignatureRecord = { signature: string; slot: number; observedAt: number };
+async function loadPersistedTradeMetricSignatures(item: TokenState): Promise<Set<string>> {
+  const signatures = new Set<string>();
+  try {
+    const content = await readFile(path.join(DATA_DIR, "tokens", item.mint, "events.jsonl"), "utf8");
+    for (const line of content.split("\n")) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        if (event.kind === "trade_metric" && typeof event.signature === "string") signatures.add(event.signature);
+      } catch { /* Ignore malformed lines without discarding valid checkpoints. */ }
+    }
+  } catch { /* Missing event files simply provide no additional deduplication evidence. */ }
+  return signatures;
+}
 async function loadHistoricalSignatureRecords(item: TokenState): Promise<HistoricalSignatureRecord[]> {
   const records = new Map<string, HistoricalSignatureRecord>();
   try {
@@ -1382,7 +1396,11 @@ async function backfillExistingTokenMetrics() {
         }
       }
       const records = await loadHistoricalSignatureRecords(item);
-      const processed = new Set(metrics.processedTradeSignatures ?? []);
+      // The compact state checkpoint is bounded. Durable trade_metric events
+      // provide a second deduplication source so older signatures are not replayed
+      // after the rolling in-memory signature window has been trimmed.
+      const persistedTradeSignatures = await loadPersistedTradeMetricSignatures(item);
+      const processed = new Set([...(metrics.processedTradeSignatures ?? []), ...persistedTradeSignatures]);
       const pending: HistoricalSignatureRecord[] = [];
       let processedThisRun = 0;
       for (const record of records) {
