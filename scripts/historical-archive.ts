@@ -239,23 +239,38 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
     ? PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(record.mint).toBuffer()], new PublicKey(PUMP))[0].toBase58()
     : null;
   const addresses = [...new Set([record.mint, record.pool, curve].filter((v): v is string => Boolean(v)))];
-  const progress = state.tradeCursors![record.mint] ?? { complete: false, pages: 0, sources: {} };
+  const progress: MintTradeCursor = state.tradeCursors![record.mint] ?? { complete: false, pages: 0, sources: {} };
   progress.sources ??= {};
   for (let sourceIndex = 0; sourceIndex < addresses.length; sourceIndex++) {
     const address = addresses[sourceIndex];
     const source: TradeSourceCursor = progress.sources[address] ?? { complete: false, pages: 0 };
     while (!source.complete && source.pages < MAX_PAGES) {
-      const page = await rpc("getSignaturesForAddress(source)", c => c.getSignaturesForAddress(new PublicKey(address), { limit: 100, ...(source.before ? { before: source.before } : {}) }, "confirmed"));
-      if (!page.length) { source.complete = true; break; }
-      const ordered = [...page].reverse();
-      const reachedLaunchBoundary = ordered.some(item => item.blockTime != null && item.blockTime < record.blockTime);
-      const candidates = ordered.filter(item => item.blockTime != null && item.blockTime >= record.blockTime && item.blockTime <= until);
-      const hydrated = await Promise.all(candidates.map(async item => ({ item, tx: await fetchTx(item.signature) })));
+      const enhanced = await getHeliusHistoryPage(address, record.blockTime, until, source.paginationToken);
+      let hydrated: Array<{ item: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
+      let reachedLaunchBoundary = false;
+      if (enhanced) {
+        hydrated = await Promise.all(enhanced.data.map(async row => ({
+          item: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
+          tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
+        })));
+        source.paginationToken = enhanced.paginationToken ?? undefined;
+        if (!enhanced.data.length || !enhanced.paginationToken) source.complete = true;
+      } else {
+        const page = await rpc("getSignaturesForAddress(source)", c => c.getSignaturesForAddress(new PublicKey(address), { limit: 100, ...(source.before ? { before: source.before } : {}) }, "confirmed"));
+        if (!page.length) { source.complete = true; progress.sources[address] = source; state.tradeCursors![record.mint] = progress; await save(); break; }
+        const ordered = [...page].reverse();
+        reachedLaunchBoundary = ordered.some(item => item.blockTime != null && item.blockTime < record.blockTime);
+        const candidates = ordered.filter(item => item.blockTime != null && item.blockTime >= record.blockTime && item.blockTime <= until);
+        hydrated = await Promise.all(candidates.map(async item => ({ item, tx: await fetchTx(item.signature) })));
+        source.before = page[page.length - 1].signature;
+        if (reachedLaunchBoundary || page.length < 100) source.complete = true;
+      }
       const lines: string[] = [];
       for (const { item, tx } of hydrated) {
-        if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${item.signature}; checkpoint remains on this page.`);
+        if (item.blockTime == null) continue;
+        if (!tx || !tx.meta) throw new Error(\`Missing historical transaction metadata for \${item.signature}; checkpoint remains on this page.\`);
         if (tx.meta.err) {
-          lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime! - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
+          lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
           continue;
         }
         const txInstructions = instructions(tx);
@@ -274,7 +289,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           lines.push(JSON.stringify({
             schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
             launchSignature: record.signature, signature: item.signature, sourceAddress: address,
-            slot: item.slot, blockTime: item.blockTime!, secondsSinceLaunch: item.blockTime! - record.blockTime,
+            slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
             eventTimestamp: event.timestamp, side: event.side, user: event.user,
             creator: record.creator, launchFeePayer: record.feePayer, launchSlot: record.slot, launchTime: record.blockTime,
             transactionFeePayer: signers(tx)[0] ?? null, fundingSources: extractFundingSources(tx, event.user),
@@ -293,19 +308,18 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           }));
         }
       }
-      const pageFile = path.join(directory, `source-${sourceIndex}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
+      const pageFile = path.join(directory, \`source-\${sourceIndex}-page-\${String(source.pages + 1).padStart(6, "0")}.jsonl\`);
       await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
-      source.before = page[page.length - 1].signature;
       source.pages++;
-      if (reachedLaunchBoundary || page.length < 100) source.complete = true;
+      if (!enhanced && (reachedLaunchBoundary || hydrated.length < 100)) source.complete = true;
       progress.sources[address] = source;
       progress.pages = Object.values(progress.sources).reduce<number>((sum, item) => sum + item.pages, 0);
-      progress.complete = addresses.every(candidate => progress.sources?.[candidate]?.complete);
+      progress.complete = addresses.every(candidate => progress.sources[candidate]?.complete === true);
       state.tradeCursors![record.mint] = progress;
       await save();
     }
     progress.sources[address] = source;
-    progress.complete = addresses.every(candidate => progress.sources?.[candidate]?.complete);
+    progress.complete = addresses.every(candidate => progress.sources[candidate]?.complete === true);
     state.tradeCursors![record.mint] = progress;
     await save();
   }
