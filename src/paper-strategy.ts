@@ -1,4 +1,4 @@
-export type RecentTradeSignal = { at: number; side: "buy" | "sell"; quoteAmount: number; wallet: string; isCreator?: boolean; botScore?: number; confidence: "high" | "low" };
+export type RecentTradeSignal = { at: number; side: "buy" | "sell"; quoteAmount: number; wallet: string; isCreator?: boolean; botScore?: number; confidence: "high" | "low"; priceUsd?: number | null };
 export type PaperPosition = {
   status: "open" | "closed";
   entryAt: number;
@@ -29,6 +29,8 @@ export type StrategyInput = {
   entryStartSeconds?: number;
   entryEndSeconds?: number;
   paperSizeUsd?: number;
+  volatilityPct?: number;
+  venueFeePctPerSide?: number | null;
 };
 export type StrategyDecision = {
   action: "wait" | "enter" | "hold" | "exit" | "reject";
@@ -60,7 +62,8 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   if (input.reserveDropPct != null && input.reserveDropPct <= -20) dangerSignals.push("curve_or_pool_quote_reserves_dropped_20_percent");
   if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_exit_price_impact_at_least_5_percent");
   if (position?.status === "open") {
-    const drawdown = position.peakPrice > 0 ? (input.price! / position.peakPrice - 1) * 100 : 0;
+    if (input.price == null || input.price <= 0) return { action: "hold", score, reasons: ["price_feed_missing_or_invalid_hold_last_known_mark"], dangerSignals: [...dangerSignals, "price_feed_missing_or_invalid"], position };
+    const drawdown = position.peakPrice > 0 ? (input.price / position.peakPrice - 1) * 100 : 0;
     if (Number.isFinite(drawdown) && drawdown <= -15) dangerSignals.push("15_percent_drawdown_from_trade_peak");
     if (sellBuyRatio >= 1.5 && sells.length >= 3) dangerSignals.push("sell_volume_1_5x_buy_volume");
     if (input.price == null || input.price <= 0) dangerSignals.push("price_feed_missing_or_invalid");
@@ -78,8 +81,9 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
     if (input.price != null && input.price > 0) {
       const peak = Math.max(position.peakPrice, input.price);
       const trailingDrawdown = peak > 0 ? (input.price / peak - 1) * 100 : 0;
-      if (trailingDrawdown <= -10) {
-        const closed: PaperPosition = { ...position, status: "closed", peakPrice: peak, lastPrice: input.price, exitAt: input.now, exitReason: "adaptive_10_percent_trailing_drawdown", estimatedExitValueQuote: position.quantity * input.price, realizedPnlQuote: position.quantity * input.price - position.estimatedEntryCostQuote };
+      const trailingStopPct = Math.min(15, Math.max(6, 8 + (input.volatilityPct ?? 1) * 1.5));
+      if (trailingDrawdown <= -trailingStopPct) {
+        const closed: PaperPosition = { ...position, status: "closed", peakPrice: peak, lastPrice: input.price, exitAt: input.now, exitReason: "adaptive_volatility_adjusted_trailing_drawdown", estimatedExitValueQuote: position.quantity * input.price, realizedPnlQuote: position.quantity * input.price - position.estimatedEntryCostQuote };
         return { action: "exit", score, reasons: ["adaptive_10_percent_trailing_drawdown"], dangerSignals, position: closed };
       }
       return { action: "hold", score, reasons: ["position_open_no_emergency_exit_signal"], dangerSignals, position: { ...position, peakPrice: peak, lastPrice: input.price } };
