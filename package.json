@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "@huggingface/hub": "^0.34.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
