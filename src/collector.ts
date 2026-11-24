@@ -2,7 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, restoreCollectorState } from "./hf-uploader.js";
+import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -135,7 +135,9 @@ async function shutdown(reason: string) {
 }
 async function main() {
   await loadState();
-  for (const item of Object.values(state.tokens)) if (item.expiresAt > Date.now()) await captureMint(item);
+  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now());
+  await restoreTokenEvents(activeTokens.map(item => item.mint));
+  for (const item of activeTokens) await captureMint(item);
   const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
   console.log("Listening for Pump program activity. API keys configured:", keys.length);
   const id = await discovery.onLogs(PUMP_PROGRAM, async (logs, context) => {
