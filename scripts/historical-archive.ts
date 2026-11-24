@@ -195,7 +195,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(program), { limit: PAGE_SIZE, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
       if (!signatures.length) { progress.complete = true; state.programs[program] = progress; await save(); break; }
       const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
-      hydrated = await Promise.all(eligible.map(async entry => ({ entry, tx: await fetchTx(entry.signature) })));
+      hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
       progress.before = signatures[signatures.length - 1].signature;
       const oldest = signatures[signatures.length - 1].blockTime;
       if (oldest != null && oldest < START || signatures.length < PAGE_SIZE) progress.complete = true;
@@ -266,7 +266,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
         const ordered = [...page].reverse();
         reachedLaunchBoundary = ordered.some(item => item.blockTime != null && item.blockTime < record.blockTime);
         const candidates = ordered.filter(item => item.blockTime != null && item.blockTime >= record.blockTime && item.blockTime <= until);
-        hydrated = await Promise.all(candidates.map(async item => ({ item, tx: await fetchTx(item.signature) })));
+        hydrated = await Promise.all(candidates.map(async item => ({ item: { signature: item.signature, slot: item.slot, blockTime: item.blockTime ?? null }, tx: await fetchTx(item.signature) })));
         source.before = page[page.length - 1].signature;
         if (reachedLaunchBoundary || page.length < 100) source.complete = true;
       }
