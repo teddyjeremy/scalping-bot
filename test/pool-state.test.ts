@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PublicKey } from "@solana/web3.js";
-import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeTokenAccountAmount, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
+import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeRaydiumCpmmPoolState, decodeTokenAccountAmount, findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 
 const key = (byte: number) => new PublicKey(Buffer.alloc(32, byte)).toBase58();
 
@@ -74,4 +74,45 @@ test("discovers a PumpSwap pool only from a matching top-level buy or sell instr
   assert.equal(findPumpSwapPoolFromInstructions([
     { programId, data: sell, accounts: ["pool2", "user", "config", "other-mint", "quote"] }
   ], "mint"), null);
+});
+
+test("decodes Raydium CPMM pool vaults, mints, fee counters and creator settings", () => {
+  const data = Buffer.alloc(637);
+  Buffer.from([247, 237, 227, 245, 215, 195, 222, 70]).copy(data, 0);
+  for (const [offset, byte] of [[40, 1], [72, 2], [104, 3], [136, 4], [168, 5], [200, 6]] as const) Buffer.alloc(32, byte).copy(data, offset);
+  data[329] = 3; data[331] = 9; data[332] = 6;
+  data.writeBigUInt64LE(999n, 333);
+  data.writeBigUInt64LE(11n, 341); data.writeBigUInt64LE(12n, 349);
+  data.writeBigUInt64LE(13n, 357); data.writeBigUInt64LE(14n, 365);
+  data.writeBigUInt64LE(1234n, 373); data[389] = 2; data[390] = 1;
+  data.writeBigUInt64LE(15n, 397); data.writeBigUInt64LE(16n, 405);
+  const decoded = decodeRaydiumCpmmPoolState(data);
+  assert.ok(decoded);
+  assert.equal(decoded.poolCreator, key(1));
+  assert.equal(decoded.token0Vault, key(2));
+  assert.equal(decoded.token1Vault, key(3));
+  assert.equal(decoded.lpMint, key(4));
+  assert.equal(decoded.token0Mint, key(5));
+  assert.equal(decoded.token1Mint, key(6));
+  assert.equal(decoded.token0Decimals, 9);
+  assert.equal(decoded.token1Decimals, 6);
+  assert.equal(decoded.lpSupplyRaw, 999n);
+  assert.equal(decoded.status, 3);
+  assert.equal(decoded.enableCreatorFee, true);
+  assert.equal(decoded.creatorFeesToken1Raw, 16n);
+});
+
+test("finds LaunchLab migration to CPMM from the migration instruction accounts", () => {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const encode = (bytes: Uint8Array) => {
+    let value = 0n; for (const byte of bytes) value = (value << 8n) + BigInt(byte);
+    let output = ""; while (value > 0n) { output = alphabet[Number(value % 58n)] + output; value /= 58n; }
+    return output;
+  };
+  const data = encode(Uint8Array.from([136, 92, 200, 103, 28, 218, 144, 140]));
+  const result = findLaunchLabCpmmMigration([{
+    programId: "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
+    data, accounts: ["payer", "mint", "quote", "platform", "cpmm-program", "pool"]
+  }], "mint");
+  assert.deepEqual(result, { pool: "pool", quoteMint: "quote" });
 });
