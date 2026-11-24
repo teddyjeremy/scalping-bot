@@ -34,8 +34,54 @@ const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, proces
 if (keys.length === 0) throw new Error("Set at least HELIUS_API_KEY_1 in your environment.");
 if (keys.length !== 3) console.warn(`Only ${keys.length} Helius API key(s) configured; using available key(s).`);
 const rpc = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-key=${key}`, "confirmed"));
+const RPC_MIN_INTERVAL_MS = Math.max(250, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? process.env.HELIUS_TX_MIN_INTERVAL_MS ?? 350));
+const rpcTails = new WeakMap<Connection, Promise<void>>();
+const rpcLastStartedAt = new WeakMap<Connection, number>();
+const RATE_LIMITED_RPC_METHODS = new Set([
+  "getAccountInfo", "getParsedAccountInfo", "getTokenSupply", "getSignaturesForAddress",
+  "getParsedTransaction", "getTransaction", "getMultipleAccountsInfo", "getProgramAccounts",
+  "onLogs", "onAccountChange"
+]);
+const rateLimitedConnections = new WeakMap<Connection, Connection>();
+function rateLimitConnection(connection: Connection): Connection {
+  const existing = rateLimitedConnections.get(connection);
+  if (existing) return existing;
+  const proxy = new Proxy(connection, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof property !== "string" || !RATE_LIMITED_RPC_METHODS.has(property) || typeof value !== "function") {
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return (...args: unknown[]) => {
+        const previous = rpcTails.get(target) ?? Promise.resolve();
+        const request = previous.then(async () => {
+          const wait = Math.max(0, (rpcLastStartedAt.get(target) ?? 0) + RPC_MIN_INTERVAL_MS - Date.now());
+          if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+          let lastError: unknown;
+          for (let attempt = 0; attempt < 4; attempt++) {
+            rpcLastStartedAt.set(target, Date.now());
+            try {
+              return await (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
+            } catch (error) {
+              lastError = error;
+              if (!/429|too many requests|rate.?limit/i.test(String(error)) || attempt === 3) throw error;
+              const delay = Math.min(20_000, 1_000 * (2 ** attempt));
+              console.warn("Helius RPC rate limited; backing off:", property, delay, "ms");
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+          }
+          throw lastError;
+        });
+        rpcTails.set(target, request.then(() => undefined, () => undefined));
+        return request;
+      };
+    }
+  });
+  rateLimitedConnections.set(connection, proxy);
+  return proxy;
+}
 let rpcCursor = 0;
-const nextRpc = () => rpc[(rpcCursor++) % rpc.length];
+const nextRpc = () => rateLimitConnection(rpc[(rpcCursor++) % rpc.length]);
 
 type TokenMetrics = {
   tradeCount: number; buyCount: number; sellCount: number;
@@ -508,24 +554,21 @@ function isCreateTransaction(tx: ParsedTransactionWithMeta): boolean {
 function createdPumpMints(tx: ParsedTransactionWithMeta): string[] {
   return [...new Set(pumpCreateInstructions(tx).map(instruction => instruction.mint).filter(mint => mint && !NON_TOKEN_MINTS.has(mint)))];
 }
-async function isMintAccount(mint: string): Promise<boolean> {
+async function isMintAccount(mint: string): Promise<boolean | null> {
   try {
     const info = await nextRpc().getAccountInfo(new PublicKey(mint), "confirmed");
     return Boolean(info && TOKEN_PROGRAMS.has(info.owner.toBase58()));
-  } catch { return false; }
+  } catch (error) {
+    console.warn("Mint-owner verification RPC failed; preserving launch for retry:", mint, String(error).slice(0, 120));
+    return null;
+  }
 }
-let transactionFetchTail: Promise<void> = Promise.resolve();
 const transactionFetches = new Map<string, Promise<ParsedTransactionWithMeta | null>>();
-let lastTransactionRequestAt = 0;
-const TRANSACTION_REQUEST_INTERVAL_MS = Math.max(250, Number(process.env.HELIUS_TX_MIN_INTERVAL_MS ?? 350));
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchTransactionWithBackoff(signature: string): Promise<ParsedTransactionWithMeta | null> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
-    const wait = Math.max(0, lastTransactionRequestAt + TRANSACTION_REQUEST_INTERVAL_MS - Date.now());
-    if (wait) await sleep(wait);
-    lastTransactionRequestAt = Date.now();
     try {
       const tx = await nextRpc().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as never });
       if (tx) return tx;
@@ -544,8 +587,9 @@ async function fetchTransactionWithBackoff(signature: string): Promise<ParsedTra
 function fetchTransaction(signature: string): Promise<ParsedTransactionWithMeta | null> {
   const existing = transactionFetches.get(signature);
   if (existing) return existing;
-  const request = transactionFetchTail.then(() => fetchTransactionWithBackoff(signature));
-  transactionFetchTail = request.then(() => undefined, () => undefined);
+  // Per-key RPC queues enforce provider pacing while allowing three configured
+  // Helius keys to make independent progress instead of one global bottleneck.
+  const request = fetchTransactionWithBackoff(signature);
   transactionFetches.set(signature, request);
   void request.finally(() => transactionFetches.delete(signature));
   return request;
