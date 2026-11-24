@@ -4,7 +4,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
-import { decodeProgramTradeEvents } from "../src/trade-events.js";\nimport { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
+import { decodeProgramTradeEvents } from "../src/trade-events.js";
+import { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
@@ -186,7 +187,13 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       const lines: string[] = [];
       for (const { item, tx } of hydrated) {
         if (!tx?.meta || tx.meta.err) continue;
-        const txInstructions = instructions(tx);\n        const pumpPool = findPumpSwapPoolFromInstructions(txInstructions, record.mint);\n        const launchLabMigration = findLaunchLabCpmmMigration(txInstructions, record.mint);\n        for (const discovered of [pumpPool?.pool, launchLabMigration?.pool]) {\n          if (discovered && !addresses.includes(discovered)) addresses.push(discovered);\n        }\n        const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, txInstructions);
+        const txInstructions = instructions(tx);
+        const pumpPool = findPumpSwapPoolFromInstructions(txInstructions, record.mint);
+        const launchLabMigration = findLaunchLabCpmmMigration(txInstructions, record.mint);
+        for (const discovered of [pumpPool?.pool, launchLabMigration?.pool]) {
+          if (discovered && !addresses.includes(discovered)) addresses.push(discovered);
+        }
+        const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, txInstructions);
         for (const event of decoded) {
           const tokenDecimals = tx.meta.preTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals
             ?? tx.meta.postTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? null;
