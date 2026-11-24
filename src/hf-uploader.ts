@@ -31,7 +31,7 @@ export async function flushHuggingFaceUploads() {
       const content = await readFile(localPath);
       return {
         path: `raw/pumpfun/${mint}/events.jsonl`,
-        content: new Blob([content], { type: "application/x-ndjson" })
+        content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" })
       };
     }));
     await uploadFiles({
