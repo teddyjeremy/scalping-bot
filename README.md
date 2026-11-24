@@ -13,6 +13,22 @@ This repository contains the first-stage **research data collector**. It does no
 - Persists state and a remote Hugging Face checkpoint, restores active token event files, and saves a Pump-program signature cursor. On later runs it reconciles missed program transactions in bounded pages and saves its page cursor so reconciliation can resume.
 - Rotates transaction-fetch requests across up to three Helius API keys.
 
+## Market, price and trading metrics (schema version 3)
+
+For each newly detected Pump mint, the collector now attempts to store the mint supply and records derived trade observations and timed market snapshots alongside the raw transaction evidence.
+
+Current derived fields include:
+- Estimated execution price in SOL and USD, plus price-change percentage from the first observed trade.
+- Estimated market capitalization in SOL and USD (estimated price multiplied by on-chain token supply; this is not circulating market cap).
+- Timed snapshots at 5, 10, 15, 30, 60, 120, 300 and 600 seconds after launch.
+- Buy/sell observation counts, estimated SOL/USD volume, unique observed buyers and sellers.
+- Highest/lowest observed USD price, maximum observed drawdown, largest observed buy/sell size, and time to 1.2x, 1.5x, 1.7x and 2x from the first observed USD price.
+- Raw transaction balances, token balances, logs, fees, slot and signature remain available for re-analysis.
+
+**Important data-quality warning:** the current price calculation is a conservative owner-balance-delta estimate, not a decoded Pump bonding-curve or PumpSwap execution price. Rent, unrelated SOL transfers, wrapped-SOL routing and multi-leg transactions can distort it. Each derived trade is labelled with its pricing method and low confidence. USD conversion uses a public SOL/USD reference endpoint and may be null when that endpoint is unavailable. Market cap is FDV-style (price × total supply), not circulating market cap, and it is not liquidity.
+
+The collector does not yet calculate trustworthy bonding-curve reserves, PumpSwap pool reserves/LP depth, slippage/exit capacity, creator/insider wallet labels, holder concentration excluding pool accounts, or venue-normalized prices. Those require venue-specific instruction and account decoders. Do not use the low-confidence estimated prices as live execution quotes or treat these metrics as verified until compared with known transactions and venue quotes.
+
 ## Important limitations of this first cut
 
 1. This is a live collector, not the November 1–23 historical backfill. Historical discovery/backfill is a separate job and must page through archived program activity.
