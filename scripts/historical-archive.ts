@@ -188,8 +188,10 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
   let progress = state.programs[program] ?? { complete: false };
-  if (progress.address !== queryAddress) {
+  if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
+  } else {
+    progress.address = queryAddress;
   }
   if (progress.complete) return;
   let pages = 0;
