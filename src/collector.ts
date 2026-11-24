@@ -87,6 +87,7 @@ const nextRpc = () => rateLimitConnection(rpc[(rpcCursor++) % rpc.length]);
 type TokenMetrics = {
   tradeCount: number; buyCount: number; sellCount: number;
   volumeSol: number; volumeUsd: number; volumeQuote: number; volumeSolAvailable?: boolean; volumeUsdAvailable?: boolean;
+  launchlabReserveRatioQuote?: number | null; launchlabRealBase?: number | null; launchlabRealQuote?: number | null; launchlabPoolStatus?: string | null;
   uniqueBuyers: string[]; uniqueSellers: string[];
   firstPriceSol: number | null; firstPriceUsd: number | null;
   lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
@@ -352,14 +353,15 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
   // Wait for the bonding-curve account; do not permanently record empty/estimated snapshots.
-  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves" && metrics.priceSource !== "pumpswap_pool_vault_reserves_plus_virtual_quote") return;
+  const isStonkFun = item.venue === "stonkfun";
+  const hasPrimaryPrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
+  if (!hasPrimaryPrice && !isStonkFun) return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
     // Never substitute wallet-balance estimates for the authoritative bonding-curve price.
-    const hasCurvePrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves" || metrics.priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote";
-    const priceSol = hasCurvePrice ? metrics.lastPriceSol : null;
-    const priceUsd = hasCurvePrice ? metrics.lastPriceUsd : null;
+    const priceSol = hasPrimaryPrice ? metrics.lastPriceSol : null;
+    const priceUsd = hasPrimaryPrice ? metrics.lastPriceUsd : null;
     const supply = item.supplyUi ?? null;
     const marketCapSol = marketCap(priceSol, supply);
     const marketCapUsd = marketCap(priceUsd, supply);
@@ -368,10 +370,19 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
     await appendTokenEvent(item.mint, {
       schemaVersion: 4, kind: "market_snapshot", mint: item.mint,
       elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
-      priceQuote: metrics.lastPriceQuote ?? null, quoteMint: metrics.quoteMint ?? null,
+      priceQuote: isStonkFun ? null : metrics.lastPriceQuote ?? null,
+      ownerBalancePriceQuoteEstimate: isStonkFun ? metrics.lastPriceQuote ?? null : null,
+      reserveRatioQuotePerBase: isStonkFun ? metrics.launchlabReserveRatioQuote ?? null : null,
+      reserveRatioIsSpotPrice: false,
+      quoteMint: metrics.quoteMint ?? null,
       quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
+      pricingMethod: isStonkFun ? "launchlab_pool_reserve_ratio_reference_only" : metrics.priceSource,
       marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
-      priceChangePctFromFirstObservedPrice: priceChangePct,
+      priceChangePctFromFirstObservedPrice: isStonkFun ? null : priceChangePct,
+      launchlabRealBase: isStonkFun ? metrics.launchlabRealBase ?? null : null,
+      launchlabRealQuote: isStonkFun ? metrics.launchlabRealQuote ?? null : null,
+      launchlabPoolStatus: isStonkFun ? metrics.launchlabPoolStatus ?? null : null,
+      marketCapBasis: "total_supply_fdv",
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
       volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
@@ -846,6 +857,14 @@ async function captureMint(item: TokenState) {
         const realQuoteUi = identityValid && decoded ? Number(decoded.realQuoteRaw) / (10 ** decoded.quoteDecimals) : null;
         const reserveRatioQuotePerBase = realBaseUi != null && realBaseUi > 0 && realQuoteUi != null
           ? realQuoteUi / realBaseUi : null;
+        if (identityValid && decoded) {
+          const metrics = ensureMetrics(item);
+          metrics.launchlabReserveRatioQuote = reserveRatioQuotePerBase;
+          metrics.launchlabRealBase = realBaseUi;
+          metrics.launchlabRealQuote = realQuoteUi;
+          metrics.launchlabPoolStatus = decoded.statusName;
+          void recordDueSnapshots(item, Date.now());
+        }
         void appendTokenEvent(mint, {
           schemaVersion: 6, kind: "launchlab_pool_state", mint, poolAddress: item.poolAddress,
           slot, owner: info.owner.toBase58(), lamports: info.lamports, dataBase64: info.data.toString("base64"),
