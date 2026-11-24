@@ -9,6 +9,7 @@ on:
       - "package.json"
       - "tsconfig.json"
       - "test/**"
+      - "scripts/**"
   workflow_dispatch:
   schedule:
     - cron: "0 */5 * * *"
@@ -46,8 +47,27 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Typecheck
+        id: typecheck
         run: npm run typecheck
       - name: Unit tests
+        id: tests
         run: npm test
+      - name: Publish preflight verification
+        if: always()
+        env:
+          VERIFICATION_STAGE: preflight
+          JOB_STATUS: ${{ job.status }}
+          TYPECHECK_STATUS: ${{ steps.typecheck.outcome }}
+          UNIT_TEST_STATUS: ${{ steps.tests.outcome }}
+        run: node scripts/publish-ci-status.mjs
       - name: Collect live Pump.fun data
+        id: collect
         run: npm start
+      - name: Publish collector result
+        if: always()
+        env:
+          VERIFICATION_STAGE: collector
+          JOB_STATUS: ${{ job.status }}
+          TYPECHECK_STATUS: ${{ steps.typecheck.outcome }}
+          UNIT_TEST_STATUS: ${{ steps.tests.outcome }}
+        run: node scripts/publish-ci-status.mjs
