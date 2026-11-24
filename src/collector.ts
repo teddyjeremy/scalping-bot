@@ -147,9 +147,12 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   const priceUsd = solUsd == null ? null : priceSol * solUsd;
   const metrics = ensureMetrics(item);
   item.supplyUi = supply;
+  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves") {
+    // Establish the baseline from the first actual curve observation, never a trade estimate.
+    metrics.firstPriceSol = priceSol;
+    metrics.firstPriceUsd = priceUsd;
+  }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
-  metrics.firstPriceSol ??= priceSol;
-  metrics.firstPriceUsd ??= priceUsd;
   metrics.lastPriceSol = priceSol;
   metrics.lastPriceUsd = priceUsd;
   metrics.lastPriceObservedAt = Date.now();
@@ -197,8 +200,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
-    const priceSol = metrics.lastPriceSol;
-    const priceUsd = metrics.lastPriceUsd;
+    // Never substitute wallet-balance estimates for the authoritative bonding-curve price.
+    const hasCurvePrice = metrics.priceSource === "pump_bonding_curve_virtual_reserves";
+    const priceSol = hasCurvePrice ? metrics.lastPriceSol : null;
+    const priceUsd = hasCurvePrice ? metrics.lastPriceUsd : null;
     const supply = item.supplyUi ?? null;
     const marketCapSol = marketCap(priceSol, supply);
     const marketCapUsd = marketCap(priceUsd, supply);
@@ -240,26 +245,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     }
     metrics.volumeSol += trade.solAmount;
     if (trade.priceUsd != null) metrics.volumeUsd += trade.solAmount * (solUsd ?? 0);
-    if (!metrics.priceSource) {
-      metrics.firstPriceSol ??= trade.priceSol;
-      metrics.firstPriceUsd ??= trade.priceUsd;
-      metrics.lastPriceSol = trade.priceSol;
-      metrics.lastPriceUsd = trade.priceUsd;
-      metrics.lastPriceObservedAt = Date.now();
-    }
-    if (!metrics.priceSource && trade.priceUsd != null) {
-      metrics.highPriceUsd = metrics.highPriceUsd == null ? trade.priceUsd : Math.max(metrics.highPriceUsd, trade.priceUsd);
-      metrics.lowPriceUsd = metrics.lowPriceUsd == null ? trade.priceUsd : Math.min(metrics.lowPriceUsd, trade.priceUsd);
-      const drawdown = metrics.highPriceUsd > 0 ? ((trade.priceUsd / metrics.highPriceUsd) - 1) * 100 : 0;
-      metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
-      if (metrics.firstPriceUsd && metrics.firstPriceUsd > 0) {
-        const multiple = trade.priceUsd / metrics.firstPriceUsd;
-        const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
-        for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
-          if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
-        }
-      }
-    }
+    // Trade-level balance deltas are retained as low-confidence wallet/volume evidence only.
+    // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
   const latest = observations[observations.length - 1];
   await appendTokenEvent(item.mint, {
