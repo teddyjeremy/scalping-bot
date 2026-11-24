@@ -1,1 +1,1 @@
-Historical archive resume: continue UTC 2026-11-01 through 2026-11-23 using restored HF checkpoints; use paced three-key failover.
+Historical archive resume: switch Pump discovery to verified create-only mint-authority PDA index; preserve LaunchLab checkpoint; continue 2026-11-01 through 2026-11-23.
