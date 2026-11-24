@@ -1,0 +1,46 @@
+import { Connection, PublicKey } from "@solana/web3.js";
+
+const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, process.env.HELIUS_API_KEY_3];
+const hfToken = process.env.HF_TOKEN;
+const dataset = process.env.HF_DATASET_REPO ?? "ndeda/solana-scalping-data";
+if (keys.some(key => !key)) throw new Error("All three Helius API keys must be configured.");
+if (new Set(keys).size !== 3) throw new Error("The three Helius secrets must contain three distinct API keys.");
+if (!hfToken) throw new Error("HF_TOKEN is missing.");
+
+const connections = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-key=${key}`, "confirmed"));
+const rpcResults = await Promise.all(connections.map(async (connection, index) => {
+  const [health, slot, genesisHash] = await Promise.all([
+    connection.getHealth(), connection.getSlot("confirmed"), connection.getGenesisHash()
+  ]);
+  if (health !== "ok" || !Number.isSafeInteger(slot) || slot <= 0) throw new Error(`Helius key ${index + 1} failed health/slot validation.`);
+  return { keyIndex: index + 1, health, slot, genesisHash };
+}));
+if (new Set(rpcResults.map(result => result.genesisHash)).size !== 1) throw new Error("Configured Helius keys are not connected to the same Solana cluster.");
+
+const programs = [
+  ["Pump.fun", "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"],
+  ["PumpSwap", "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"],
+  ["Raydium LaunchLab", "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj"],
+  ["Raydium CPMM", "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"],
+  ["Raydium LP Lock", "LockrWmn6K5twhz3y9w1dQERbmgSaRkfnTeTKbpofwE"]
+] as const;
+const programResults = await Promise.all(programs.map(async ([name, address]) => {
+  const info = await connections[0].getAccountInfo(new PublicKey(address), "confirmed");
+  if (!info?.executable) throw new Error(`${name} program account is missing or not executable.`);
+  return { name, executable: info.executable, owner: info.owner.toBase58() };
+}));
+
+const response = await fetch(`https://huggingface.co/api/datasets/${dataset}`, {
+  headers: { Authorization: `Bearer ${hfToken}` },
+  signal: AbortSignal.timeout(20_000)
+});
+if (!response.ok) throw new Error(`Hugging Face dataset read check failed: HTTP ${response.status}`);
+const datasetInfo = await response.json() as { id?: string; private?: boolean };
+console.log(JSON.stringify({
+  status: "preflight_passed",
+  collectionStarted: false,
+  heliusConnections: rpcResults.map(({ keyIndex, health, slot }) => ({ keyIndex, health, slot })),
+  programAccounts: programResults,
+  huggingFace: { dataset: datasetInfo.id ?? dataset, readable: true, writePermissionTested: false },
+  note: "All three RPC keys were tested concurrently. This validates connectivity, not independent quota allocation or write permissions."
+}, null, 2));
