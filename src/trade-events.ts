@@ -65,6 +65,8 @@ export type DecodedProgramTrade = {
   creatorFeeMint?: string;
   inputTransferFeeRaw?: bigint;
   outputTransferFeeRaw?: bigint;
+  preTradeBaseReserveRaw?: bigint;
+  preTradeQuoteReserveRaw?: bigint;
 };
 
 type LaunchLabSwap = { user: string; pool: string; quoteMint: string; side: "buy" | "sell" };
@@ -91,7 +93,7 @@ function decodePump(data: Buffer): DecodedProgramTrade | null {
     const r = new Reader(data); r.offset = 8;
     const mint = r.key(); const solAmount = r.u64(); const tokenAmountRaw = r.u64();
     const isBuy = r.bool(); const user = r.key(); const timestamp = Number(r.i64());
-    r.u64(); r.u64(); r.u64(); r.u64();
+    const virtualQuoteAfter = r.u64(); const virtualBaseAfter = r.u64(); r.u64(); r.u64();
     const feeRecipient = r.key(); const protocolFeeBps = r.u64(); const protocolFeeRaw = r.u64();
     const creator = r.key(); const creatorFeeBps = r.u64(); const creatorFeeRaw = r.u64();
     let quoteMint = SOL_MINT; let quoteAmountRaw = solAmount;
@@ -112,7 +114,9 @@ function decodePump(data: Buffer): DecodedProgramTrade | null {
       tokenAmountRaw, quoteMint, quoteAmountRaw, protocolFeeRaw, platformFeeRaw: null, lpFeeRaw: null,
       creatorFeeRaw, shareFeeRaw: null, cashbackRaw, buybackFeeRaw, protocolFeeBps, lpFeeBps: null,
       creatorFeeBps, instructionName, pool: null, creator: creator === ZERO_KEY ? null : creator,
-      feeRecipient: feeRecipient === ZERO_KEY ? null : feeRecipient, virtualQuoteReservesRaw, realQuoteReservesRaw
+      feeRecipient: feeRecipient === ZERO_KEY ? null : feeRecipient, virtualQuoteReservesRaw, realQuoteReservesRaw,
+      preTradeBaseReserveRaw: isBuy ? virtualBaseAfter + tokenAmountRaw : virtualBaseAfter > tokenAmountRaw ? virtualBaseAfter - tokenAmountRaw : 0n,
+      preTradeQuoteReserveRaw: isBuy ? (virtualQuoteReservesRaw ?? virtualQuoteAfter) > quoteAmountRaw ? (virtualQuoteReservesRaw ?? virtualQuoteAfter) - quoteAmountRaw : 0n : (virtualQuoteReservesRaw ?? virtualQuoteAfter) + quoteAmountRaw
     };
   } catch { return null; }
 }
@@ -142,7 +146,9 @@ function decodePumpAmm(data: Buffer, side: "buy" | "sell"): DecodedProgramTrade 
       protocolFeeRaw, platformFeeRaw: null, lpFeeRaw, creatorFeeRaw, shareFeeRaw: null,
       cashbackRaw, buybackFeeRaw, protocolFeeBps, lpFeeBps, creatorFeeBps,
       instructionName, pool, creator: creator === ZERO_KEY ? null : creator, feeRecipient: null,
-      virtualQuoteReservesRaw, realQuoteReservesRaw: null
+      virtualQuoteReservesRaw, realQuoteReservesRaw: null,
+      preTradeBaseReserveRaw: side === "buy" ? poolBaseAfter + tokenAmountRaw : poolBaseAfter > tokenAmountRaw ? poolBaseAfter - tokenAmountRaw : 0n,
+      preTradeQuoteReserveRaw: side === "buy" ? (virtualQuoteReservesRaw ?? poolQuoteAfter) > (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) ? (virtualQuoteReservesRaw ?? poolQuoteAfter) - (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw) : 0n : (virtualQuoteReservesRaw ?? poolQuoteAfter) + (userQuoteAmountRaw > 0n ? userQuoteAmountRaw : poolQuoteAmountRaw)
     };
   } catch { return null; }
 }
@@ -152,7 +158,7 @@ function decodeLaunchLab(data: Buffer, targetMint: string, instructions: Array<{
     const r = new Reader(data); r.offset = 8;
     const pool = r.key();
     r.u64(); r.u64(); r.u64();
-    r.u64(); r.u64(); r.u64(); r.u64();
+    const realBaseBefore = r.u64(); const realQuoteBefore = r.u64(); r.u64(); r.u64();
     const amountIn = r.u64(); const amountOut = r.u64();
     const protocolFeeRaw = r.u64(); const platformFeeRaw = r.u64();
     const creatorFeeRaw = r.u64(); const shareFeeRaw = r.u64();
@@ -168,7 +174,8 @@ function decodeLaunchLab(data: Buffer, targetMint: string, instructions: Array<{
       protocolFeeRaw, platformFeeRaw, lpFeeRaw: null, creatorFeeRaw, shareFeeRaw,
       cashbackRaw: null, buybackFeeRaw: null, protocolFeeBps: null, lpFeeBps: null,
       creatorFeeBps: null, instructionName: null, pool, creator: null, feeRecipient: null,
-      virtualQuoteReservesRaw: null, realQuoteReservesRaw: null
+      virtualQuoteReservesRaw: null, realQuoteReservesRaw: null,
+      preTradeBaseReserveRaw: realBaseBefore, preTradeQuoteReserveRaw: realQuoteBefore
     };
   } catch { return null; }
 }
@@ -208,6 +215,7 @@ export function decodeProgramTradeEvents(
           instructionName: null, feeRecipient: null, creator: null,
           virtualQuoteReservesRaw: null, realQuoteReservesRaw: null,
           venueTradeFeeRaw: raydium.tradeFeeRaw, venueTradeFeeMint: raydium.tradeFeeMint,
+          preTradeBaseReserveRaw: raydium.preTradeBaseReserveRaw, preTradeQuoteReserveRaw: raydium.preTradeQuoteReserveRaw,
           inputTransferFeeRaw: raydium.inputTransferFeeRaw, outputTransferFeeRaw: raydium.outputTransferFeeRaw
         } : null;
       }
