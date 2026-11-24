@@ -1,6 +1,6 @@
 {
   "schema_version": "3.0.0",
-  "status": "implementation_in_progress",
+  "status": "free_tier_compatible_collector_validation_required",
   "collection_window": {
     "start_utc": "2026-11-01T00:00:00Z",
     "end_utc_exclusive": "2026-11-24T00:00:00Z"
@@ -82,9 +82,17 @@
       "maximum_full_transaction_records_per_page": 100,
       "documented_credits_per_call": 100,
       "paid_plan_access_required": true,
-      "fallback_when_unavailable_or_credit_limited": "standard_getSignaturesForAddress_plus_getTransaction"
+      "fallback_when_unavailable_or_credit_limited": "standard_getSignaturesForAddress_plus_getTransaction",
+      "enabled": false
     },
-    "api_keys": "three_distinct_keys_preflight_authenticated",
-    "no_data_collection_during_preflight": true
+    "api_keys": "three distinct Free-tier keys; do not assume separate keys increase the account credit allowance",
+    "no_data_collection_during_preflight": true,
+    "helius_plan": "free",
+    "history_strategy": "standard_getSignaturesForAddress_plus_getParsedTransaction",
+    "standard_rpc_limits": {
+      "per_key_min_interval_ms": 2000,
+      "concurrent_transaction_hydration_workers": 3,
+      "rotate_keys_on_rate_limit": true
+    }
   }
 }
