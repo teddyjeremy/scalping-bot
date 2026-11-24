@@ -77,6 +77,7 @@ type CollectorState = {
   lastLaunchLabSignature?: string;
   launchLabReconcileTarget?: string;
   launchLabReconcileBefore?: string;
+  pendingActivity?: Record<string, Array<{ signature: string; slot: number; observedAt: number; logs: string[] }>>;
 };
 const statePath = path.join(DATA_DIR, "collector-state.json");
 const qualityPath = path.join(DATA_DIR, "quality", "data-quality-manifest.json");
@@ -93,6 +94,8 @@ const activeSubscriptions = new Map<string, { connection: Connection; id: number
 let discoverySubscription: { connection: Connection; id: number } | undefined;
 let stonkDiscoverySubscription: { connection: Connection; id: number } | undefined;
 let expiryTimer: NodeJS.Timeout | undefined;
+let pendingRetryTimer: NodeJS.Timeout | undefined;
+let retryingPendingActivity = false;
 let runTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 let reconciliation: Promise<void> | undefined;
@@ -781,6 +784,7 @@ async function loadState() {
     state = JSON.parse(await readFile(statePath, "utf8")) as CollectorState;
     state.tokens ??= {};
     state.seenLaunchSignatures ??= [];
+    state.pendingActivity ??= {};
     try {
       qualityManifest = JSON.parse(await readFile(qualityPath, "utf8")) as typeof qualityManifest;
       qualityManifest.quarantinedMints ??= {};
@@ -801,7 +805,7 @@ async function loadState() {
     await persistQualityManifest();
   } catch (error) {
     console.error("Checkpoint is invalid; starting a clean state without deleting remote data:", String(error).slice(0, 160));
-    state = { tokens: {}, seenLaunchSignatures: [] };
+    state = { tokens: {}, seenLaunchSignatures: [], pendingActivity: {} };
     await persistState();
   }
 }
