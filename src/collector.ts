@@ -122,7 +122,7 @@ type TokenState = {
   venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; cpmmPoolAddress?: string; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
-  mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null;
+  mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null; mintMetadataParsed?: boolean;
   tokenProgramOwner?: string | null; tokenExtensions?: Array<{ extension: string; state?: unknown }> | null;
   metrics?: TokenMetrics;
 };
@@ -1324,15 +1324,15 @@ async function stopCapture(mint: string) {
   }
 }
 async function fetchMintRiskMetadata(mint: string): Promise<{
-  mintAuthority: string | null; freezeAuthority: string | null; mintInitialized: boolean | null;
+  mintAuthority: string | null; freezeAuthority: string | null; mintInitialized: boolean | null; mintMetadataParsed: boolean;
   tokenProgramOwner: string | null; tokenExtensions: Array<{ extension: string; state?: unknown }> | null;
 }> {
   try {
     const response = await nextRpc().getParsedAccountInfo(new PublicKey(mint), "confirmed");
-    if (!response.value) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: null, tokenExtensions: null };
+    if (!response.value) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, mintMetadataParsed: false, tokenProgramOwner: null, tokenExtensions: null };
     const accountData = response.value.data as unknown as { parsed?: { info?: Record<string, unknown> } };
     const info = accountData.parsed?.info;
-    if (!info) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: response.value.owner.toBase58(), tokenExtensions: null };
+    if (!info) return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, mintMetadataParsed: false, tokenProgramOwner: response.value.owner.toBase58(), tokenExtensions: null };
     const rawExtensions = Array.isArray(info.extensions) ? info.extensions : null;
     const tokenExtensions = rawExtensions?.map(value => {
       const extension = value as Record<string, unknown>;
@@ -1342,12 +1342,13 @@ async function fetchMintRiskMetadata(mint: string): Promise<{
       mintAuthority: info.mintAuthority ? String(info.mintAuthority) : null,
       freezeAuthority: info.freezeAuthority ? String(info.freezeAuthority) : null,
       mintInitialized: typeof info.isInitialized === "boolean" ? info.isInitialized : null,
+      mintMetadataParsed: true,
       tokenProgramOwner: response.value.owner.toBase58(),
       tokenExtensions
     };
   } catch (error) {
     console.warn("Could not read mint authority/extensions:", mint, String(error).slice(0, 120));
-    return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, tokenProgramOwner: null, tokenExtensions: null };
+    return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, mintMetadataParsed: false, tokenProgramOwner: null, tokenExtensions: null };
   }
 }
 async function processLaunch(signature: string, slot: number, logs: string[], tx: ParsedTransactionWithMeta) {
@@ -1377,8 +1378,9 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       schemaVersion: 2, kind: "launch_detected", mint, feePayer,
       creator: null, creatorEvidence: "not decoded; fee payer is stored separately",
       totalSupply: supplyUi, supplyDecimals, supplySource: "Solana getTokenSupply",
-      ...mintRisk, mintAuthorityRenounced: mintRisk.mintAuthority == null,
-      freezeAuthorityRenounced: mintRisk.freezeAuthority == null,
+      ...mintRisk, mintMetadataParsed: mintRisk.mintMetadataParsed,
+      mintAuthorityRenounced: mintRisk.mintMetadataParsed ? mintRisk.mintAuthority == null : null,
+      freezeAuthorityRenounced: mintRisk.mintMetadataParsed ? mintRisk.freezeAuthority == null : null,
       launchSignature: signature, launchSlot: slot, firstSeenAt,
       program: PUMP_PROGRAM.toBase58(), instruction: createInstruction.kind, launchVerification: "IDL discriminator + mint account owner", launchLogs: logs
     });
