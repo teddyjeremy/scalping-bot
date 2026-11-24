@@ -36,6 +36,12 @@ export type TradeObservation = {
   protocolFeeBps?: number | null;
   lpFeeBps?: number | null;
   creatorFeeBps?: number | null;
+  tradeFeeBase?: number | null;
+  creatorFeeBase?: number | null;
+  tradeFeeMint?: string | null;
+  creatorFeeMint?: string | null;
+  inputTransferFeeRaw?: string | null;
+  outputTransferFeeRaw?: string | null;
 };
 
 /**
