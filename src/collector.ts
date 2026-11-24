@@ -324,7 +324,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number) {
   const solUsd = await getSolUsd();
-  const knownQuoteMint = ensureMetrics(item).quoteMint;
+  const knownQuoteMint = item.quoteMint ?? ensureMetrics(item).quoteMint;
   // Do not guess SOL while the curve account has not yet identified the actual quote asset.
   // The raw transaction is still persisted by the caller for later decoding.
   if (!knownQuoteMint) return;
@@ -353,6 +353,25 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     // Bonding-curve virtual reserves are the sole source for the primary price and market-cap series.
   }
   const latest = observations[observations.length - 1];
+  if (item.venue === "stonkfun" || metrics.priceSource !== "pump_bonding_curve_virtual_reserves" || metrics.curveComplete === true) {
+    metrics.firstPriceQuote ??= latest.priceQuote;
+    metrics.firstPriceSol ??= latest.priceSol;
+    metrics.firstPriceUsd ??= latest.priceUsd;
+    metrics.lastPriceQuote = latest.priceQuote;
+    metrics.lastPriceSol = latest.priceSol;
+    metrics.lastPriceUsd = latest.priceUsd;
+    metrics.lastPriceObservedAt = Date.now();
+    metrics.priceSource = "owner_balance_delta_estimate";
+    metrics.highPriceQuote = metrics.highPriceQuote == null ? latest.priceQuote : Math.max(metrics.highPriceQuote, latest.priceQuote);
+    metrics.lowPriceQuote = metrics.lowPriceQuote == null ? latest.priceQuote : Math.min(metrics.lowPriceQuote, latest.priceQuote);
+    const multiple = metrics.firstPriceQuote && metrics.firstPriceQuote > 0 ? latest.priceQuote / metrics.firstPriceQuote : 1;
+    const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+    for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
+      if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
+    }
+    const drawdown = metrics.highPriceQuote > 0 ? ((latest.priceQuote / metrics.highPriceQuote) - 1) * 100 : 0;
+    metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
+  }
   await appendTokenEvent(item.mint, {
     schemaVersion: 3, kind: "trade_metric", mint: item.mint, signature, slot,
     blockTime: tx.blockTime, observations,
