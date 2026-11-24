@@ -592,6 +592,20 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     return (data.walletProfiles ?? []).filter(p => p.launchFeePayer).map(p => p.wallet);
   }))];
   const sourcePageFingerprint = sourceHash.digest("hex");
+  const derivedPumpCurve = record.venue === "pumpfun"
+    ? PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(record.mint).toBuffer()], new PublicKey(PUMP))[0].toBase58()
+    : null;
+  const sourceAddressClassification = Object.fromEntries(Object.entries(state.tradeCursors?.[record.mint]?.sources ?? {}).map(([address, cursor]) => [
+    address,
+    {
+      role: address === record.mint ? "mint_account_history"
+        : address === record.pool ? "launch_pool_reference"
+        : address === derivedPumpCurve ? "pump_bonding_curve_pda"
+        : "pool_discovered_from_swap_or_migration_instruction",
+      paginationComplete: cursor.complete,
+      pages: cursor.pages
+    }
+  ]));
   const summary = {
     schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,
     sourcePageCount: names.length, sourcePageFiles: names, sourcePageFingerprint,
@@ -627,6 +641,17 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     networkFees: { launchTransactionFeeLamports: launchEvidence.transaction?.feeLamports ?? null, uniqueTradeTransactions: tradeFees.size, tradeTransactionFeeLamportsTotal: [...tradeFees.values()].reduce((sum, value) => sum + value, 0), failedTransactions: failedFees.size, failedTransactionFeeLamportsTotal: [...failedFees.values()].reduce((sum, value) => sum + value, 0) },
     protocolAndVenueFeesByMintRaw: feeSummaryByMint,
     developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
+    venueStateClassification: {
+      launchVenue: record.venue,
+      bondingCurveAddress: derivedPumpCurve,
+      launchPoolAddress: record.pool,
+      sourceAddresses: sourceAddressClassification,
+      bondingCurveStatus: record.venue === "pumpfun" ? "derived_address_not_historically_account_verified" : "not_applicable",
+      launchPoolStatus: record.venue === "stonkfun" ? "launch_instruction_reference_not_historically_account_verified" : "unknown_until_migration_pool_is_discovered",
+      reserveStatus: "event_evidence_only_not_full_historical_account_snapshot",
+      lockedLiquidityStatus: "unavailable_not_verified",
+      safetyClassification: "unverified"
+    },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
       historicalUsdPrice: { status: "unavailable", reason: "No verified historical SOL/USD and quote-asset price source is wired into this collector." },
