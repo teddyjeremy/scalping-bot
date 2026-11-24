@@ -144,9 +144,8 @@ export function updateWalletProfile(
     if (source !== trade.wallet && !profile.fundingSources.includes(source)) profile.fundingSources.push(source);
   }
 
-  if (newSignature) {
-    if (trade.side === "buy") {
-      profile.buyCount++;
+  if (trade.side === "buy") {
+    profile.buyCount++;
     profile.tokenBought += trade.tokenAmount;
     profile.quoteSpent += trade.quoteAmount;
     if (trade.confidence === "high") profile.exactQuoteSpent += trade.quoteAmount;
@@ -182,7 +181,6 @@ export function updateWalletProfile(
       profile.remainingObservedCostBasisQuote = Math.max(0, basis - costRemoved);
     }
     profile.lastSellAt = context.observedAt;
-    }
   }
   profile.observedNetTokenChange = profile.tokenBought - profile.tokenSold;
   profile.sameSlotAsLaunch ||= context.slot === context.launchSlot;
