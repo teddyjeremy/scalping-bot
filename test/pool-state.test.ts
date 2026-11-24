@@ -34,7 +34,7 @@ test("decodes PumpSwap pool reserves metadata and appended virtual quote reserve
   for (const [offset, byte] of [[11, 1], [43, 2], [75, 3], [107, 4], [139, 5], [171, 6], [211, 7]] as const) Buffer.alloc(32, byte).copy(data, offset);
   data.writeBigUInt64LE(999n, 203);
   data[243] = 1; data[244] = 0;
-  data.writeBigInt128LE(25n, 245);
+  data.writeBigUInt64LE(25n, 245); data.writeBigInt64LE(0n, 253);
   const decoded = decodePumpSwapPoolState(data);
   assert.ok(decoded);
   assert.equal(decoded.index, 0);
