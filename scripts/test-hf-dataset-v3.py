@@ -39,6 +39,13 @@ def delete_remote():
         if "404" not in str(exc) and "not found" not in str(exc).lower():
             raise
 
+    try:
+        api.delete_file(path_in_repo="dataset_v3/control/checkpoint.json", repo_id=module.REPO_ID,
+                        repo_type="dataset", commit_message="Remove temporary v3 smoke-test checkpoint")
+    except Exception as exc:
+        if "404" not in str(exc) and "not found" not in str(exc).lower():
+            raise
+
 try:
     with tempfile.TemporaryDirectory(prefix="solana-v3-smoke-") as tmp:
         root = Path(tmp) / "historical-data"
