@@ -371,7 +371,9 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
   if (addresses.length === 0) return false;
   const accounts = await connection.getMultipleAccountsInfo(addresses, "confirmed");
   const excluded = new Set<string>();
+  const excludedOwners = new Set<string>();
   if (item.poolAddress) {
+    excludedOwners.add(item.poolAddress);
     try {
       const info = await connection.getAccountInfo(new PublicKey(item.poolAddress), "confirmed");
       if (info) {
@@ -380,7 +382,16 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
       }
     } catch {}
   }
+  if (item.venue === "pumpfun") {
+    try {
+      const [curveAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve"), new PublicKey(item.mint).toBuffer()], PUMP_PROGRAM
+      );
+      excludedOwners.add(curveAddress.toBase58());
+    } catch {}
+  }
   if (item.pumpSwapPoolAddress) {
+    excludedOwners.add(item.pumpSwapPoolAddress);
     try {
       const info = await connection.getAccountInfo(new PublicKey(item.pumpSwapPoolAddress), "confirmed");
       if (info) {
@@ -396,7 +407,7 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
     const owner = new PublicKey(account.data.subarray(32, 64)).toBase58();
     const amount = Number(entry.amount) / (10 ** item.supplyDecimals!);
     if (!Number.isFinite(amount) || amount < 0) return [];
-    const isPoolVault = excluded.has(address);
+    const isPoolVault = excluded.has(address) || excludedOwners.has(owner);
     return [{ tokenAccount: address, owner, amount, sharePct: amount / item.supplyUi! * 100, isPoolVault }];
   });
   const circulatingCandidates = holders.filter(holder => !holder.isPoolVault);
