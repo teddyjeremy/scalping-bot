@@ -1,7 +1,7 @@
 name: Collector typecheck
 
 on:
-  workflow_dispatch:
+  push:
 
 jobs:
   typecheck:
