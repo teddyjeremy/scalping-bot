@@ -519,22 +519,39 @@ async function captureMint(item: TokenState) {
         } : null
       });
     }, "confirmed");
-    const [curveAddress] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bonding-curve"), new PublicKey(mint).toBuffer()], PUMP_PROGRAM
-    );
-    const curveId = connection.onAccountChange(curveAddress, (accountInfo, context) => {
-      const current = state.tokens[mint];
-      if (!shuttingDown && current && accountInfo.data) {
-        void processCurveState(current, accountInfo.data, context.slot).catch(error =>
-          console.error("Bonding-curve decode failed:", mint, String(error).slice(0, 160))
-        );
-      }
-    }, "confirmed");
-    void connection.getAccountInfo(curveAddress, "confirmed").then(info => {
-      const current = state.tokens[mint];
-      if (info && current) return processCurveState(current, info.data, 0);
-      return undefined;
-    }).catch(error => console.warn("Initial bonding-curve read failed:", mint, String(error).slice(0, 120)));
+    let curveId: number | undefined;
+    if (item.venue === "stonkfun" && item.poolAddress) {
+      const poolAddress = new PublicKey(item.poolAddress);
+      const recordPoolState = (info: { owner: PublicKey; lamports: number; data: Buffer }, slot: number) => {
+        void appendTokenEvent(mint, {
+          schemaVersion: 5, kind: "launchlab_pool_state_raw", mint, poolAddress: item.poolAddress,
+          slot, owner: info.owner.toBase58(), lamports: info.lamports, dataBase64: info.data.toString("base64")
+        });
+      };
+      curveId = connection.onAccountChange(poolAddress, (accountInfo, context) => {
+        if (!shuttingDown && state.tokens[mint]) recordPoolState(accountInfo, context.slot);
+      }, "confirmed");
+      void connection.getAccountInfo(poolAddress, "confirmed").then(info => {
+        if (info) recordPoolState(info, 0);
+      }).catch(error => console.warn("Initial LaunchLab pool read failed:", mint, String(error).slice(0, 120)));
+    } else {
+      const [curveAddress] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bonding-curve"), new PublicKey(mint).toBuffer()], PUMP_PROGRAM
+      );
+      curveId = connection.onAccountChange(curveAddress, (accountInfo, context) => {
+        const current = state.tokens[mint];
+        if (!shuttingDown && current && accountInfo.data) {
+          void processCurveState(current, accountInfo.data, context.slot).catch(error =>
+            console.error("Bonding-curve decode failed:", mint, String(error).slice(0, 160))
+          );
+        }
+      }, "confirmed");
+      void connection.getAccountInfo(curveAddress, "confirmed").then(info => {
+        const current = state.tokens[mint];
+        if (info && current) return processCurveState(current, info.data, 0);
+        return undefined;
+      }).catch(error => console.warn("Initial bonding-curve read failed:", mint, String(error).slice(0, 120)));
+    }
     const timer = setInterval(() => {
       const item = state.tokens[mint];
       if (item) void recordDueSnapshots(item, Date.now()).catch(error => console.error("Snapshot error:", String(error)));
@@ -569,7 +586,7 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
     const createInstruction = pumpCreateInstructions(tx).find(instruction => instruction.mint === mint);
     if (!createInstruction) continue;
     const item: TokenState = {
-      mint, creator: null, launchSignature: signature, launchVerified: true, launchInstruction: createInstruction.kind, firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
+      mint, creator: null, launchSignature: signature, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
       supplyUi, supplyDecimals
     };
     ensureMetrics(item);
@@ -697,6 +714,7 @@ async function auditExistingLaunches() {
     } else {
       item.launchVerified = true;
       item.launchInstruction = create.kind;
+      item.venue ??= "pumpfun";
       changed = true;
       console.log("Historical launch verified against Pump IDL discriminator:", item.mint, create.kind);
     }
