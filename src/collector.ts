@@ -618,7 +618,7 @@ async function retryPendingActivityTransactions() {
 
 async function migrateQuarantinedMint(mint: string) {
   const entry = qualityManifest.quarantinedMints[mint];
-  if (!entry || entry.rawMovedToQuarantine === true || entry.status === "deleted") return;
+  if (!entry || entry.rawMovedToQuarantine === true || entry.status === "deleted" || entry.status === "delete_pending") return;
   const reason = String(entry.reason ?? "Failed strict launch verification.");
   const moved = await quarantineRemoteMintFile(mint, reason);
   if (moved) {
@@ -1109,12 +1109,16 @@ async function loadState() {
       if (!qualityManifest.rules.includes(stonkRule)) qualityManifest.rules.push(stonkRule);
     } catch { /* A new manifest is created below. */ }
     qualityManifest.quarantinedMints[WRAPPED_SOL_MINT] ??= {
-      status: "excluded", reason: "False launch: wrapped SOL was stored as the mint; inspected launch signature is a Pump buy, not create/create_v2.",
+      status: "delete_pending", reason: "Confirmed false launch: wrapped SOL was stored as the mint; inspected launch signature is a Pump buy, not create/create_v2. A guarded dataset cleanup workflow removes the invalid raw file.",
       launchSignature: "3mR3oyYXHEPWWCUhv3URSCjVXABTUoGDv4eowDGJp5Dv522sghdc66janYMgm7KU4uLYwRmvTXV5CQuV6voRwQUw",
-      rawPath: `raw/pumpfun/${WRAPPED_SOL_MINT}/events.jsonl`, retainedForAudit: true
+      rawPath: `raw/pumpfun/${WRAPPED_SOL_MINT}/events.jsonl`, rawDeleted: false, retainedForAudit: false
     };
     for (const mint of NON_TOKEN_MINTS) {
-      if (state.tokens[mint]) qualityManifest.quarantinedMints[mint] = { status: "excluded", reason: "Quote asset is not a newly launched Pump token.", rawPath: `raw/pumpfun/${mint}/events.jsonl`, retainedForAudit: true };
+      if (state.tokens[mint]) qualityManifest.quarantinedMints[mint] = {
+        status: mint === WRAPPED_SOL_MINT ? "delete_pending" : "excluded",
+        reason: "Quote asset is not a newly launched Pump token.",
+        rawPath: `raw/pumpfun/${mint}/events.jsonl`, retainedForAudit: mint !== WRAPPED_SOL_MINT
+      };
       delete state.tokens[mint];
     }
     for (const mint of Object.keys(qualityManifest.quarantinedMints)) await migrateQuarantinedMint(mint);
