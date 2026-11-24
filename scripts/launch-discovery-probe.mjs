@@ -1,10 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 
-const pumpOffsets = [0, 500, 1000, 1500, 2000, 3000, 5000, 8000, 12000];
-const pumpProbes = pumpOffsets.map(offset => ({
-  name: `pumpfun_created_asc_offset_${offset}`,
-  url: `https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=100&sort=created_timestamp&order=ASC&includeNsfw=false`
-}));
+const pumpOffsets = [0, 70, 140, 210, 350, 500, 700, 1000, 1400, 1500];
+const pumpProbes = ["ASC", "DESC"].flatMap(order => pumpOffsets.map(offset => ({
+  name: `pumpfun_created_${order.toLowerCase()}_offset_${offset}`,
+  url: `https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=100&sort=created_timestamp&order=${order}&includeNsfw=false`
+})));
 
 async function requestJson(name, url) {
   const started = Date.now();
@@ -16,14 +16,9 @@ async function requestJson(name, url) {
     const raw = await response.text();
     let body = null;
     try { body = JSON.parse(raw); } catch {}
-    return {
-      name, url, httpStatus: response.status, ok: response.ok,
-      elapsedMs: Date.now() - started,
-      body,
-      bodyPreview: body ? null : raw.slice(0, 500)
-    };
+    return { name, url, httpStatus: response.status, ok: response.ok, elapsedMs: Date.now() - started, body, bodyPreview: body ? null : raw.slice(0, 300) };
   } catch (error) {
-    return { name, url, ok: false, elapsedMs: Date.now() - started, error: String(error).slice(0, 400) };
+    return { name, url, ok: false, elapsedMs: Date.now() - started, error: String(error).slice(0, 300) };
   }
 }
 
@@ -36,83 +31,63 @@ function rowsFrom(body) {
   return [];
 }
 
-function summarize(name, result) {
+function summarize(result) {
   const rows = rowsFrom(result.body);
-  const first = rows[0] ?? null;
-  const last = rows.at(-1) ?? null;
   const pick = item => item ? {
     mint: item.mint ?? item.address ?? item.baseMint ?? null,
-    createdTimestamp: item.created_timestamp ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
+    createdAt: item.created_timestamp ?? item.createAt ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
     creator: item.creator ?? item.creatorAddress ?? null,
     pool: item.pool ?? item.poolId ?? item.id ?? null
   } : null;
   const data = result.body?.data ?? result.body;
   return {
-    name, url: result.url, httpStatus: result.httpStatus, ok: result.ok,
-    elapsedMs: result.elapsedMs, rowCount: rows.length,
-    firstRowKeys: first ? Object.keys(first).slice(0, 60) : [],
-    pagination: data && typeof data === "object" ? {
-      nextPageId: data.nextPageId ?? data.next_page_id ?? null,
-      total: data.total ?? null,
-      hasMore: data.hasMore ?? data.has_more ?? null
-    } : null,
-    first: pick(first), last: pick(last),
-    error: result.error ?? null,
-    bodyPreview: result.bodyPreview ?? null
+    name: result.name, httpStatus: result.httpStatus, ok: result.ok, elapsedMs: result.elapsedMs,
+    rowCount: rows.length, first: pick(rows[0]), last: pick(rows.at(-1)),
+    nextPageId: data && typeof data === "object" ? data.nextPageId ?? data.next_page_id ?? null : null,
+    error: result.error ?? null, bodyPreview: result.bodyPreview ?? null
   };
 }
 
 const results = [];
-for (const probe of pumpProbes) {
-  const response = await requestJson(probe.name, probe.url);
-  results.push(summarize(probe.name, response));
-}
+for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.name, probe.url)));
 
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
 const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
-const raydiumFirst = await requestJson(
-  "raydium_launchlab_new_page_1",
-  `${raydiumBase}?${raydiumParams}`
-);
-results.push(summarize("raydium_launchlab_new_page_1", raydiumFirst));
-
-const raydiumData = raydiumFirst.body?.data ?? {};
-const nextPageId = raydiumData?.nextPageId ?? null;
-if (raydiumFirst.ok && raydiumFirst.body?.success === true && nextPageId) {
-  const second = await requestJson(
-    "raydium_launchlab_new_page_2",
-    `${raydiumBase}?${raydiumParams}&nextPageId=${encodeURIComponent(nextPageId)}`
-  );
-  results.push(summarize("raydium_launchlab_new_page_2", second));
-} else {
-  results.push({
-    name: "raydium_launchlab_new_page_2",
-    skipped: true,
-    reason: "First page did not return a success envelope with nextPageId"
-  });
+let nextPageId = null;
+for (let page = 1; page <= 10; page++) {
+  const url = `${raydiumBase}?${raydiumParams}${nextPageId ? `&nextPageId=${encodeURIComponent(nextPageId)}` : ""}`;
+  const response = await requestJson(`raydium_launchlab_new_page_${page}`, url);
+  const summary = summarize(response);
+  results.push(summary);
+  const data = response.body?.data ?? {};
+  const next = data?.nextPageId ?? null;
+  if (!response.ok || response.body?.success !== true || !summary.rowCount || !next || next === nextPageId) break;
+  nextPageId = next;
 }
 
 const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
-const raydiumHasRows = results.some(r => r.name === "raydium_launchlab_new_page_1" && r.ok && r.rowCount > 0 && r.first?.mint);
-const raydiumCursorObserved = results.some(r => r.name === "raydium_launchlab_new_page_1" && r.pagination?.nextPageId);
+const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_") && r.ok && r.rowCount > 0);
+const raydiumHasRows = raydiumPages.length > 0;
+const raydiumCursorObserved = raydiumPages.some(r => r.nextPageId);
 
 const report = {
   generatedAt: new Date().toISOString(),
-  purpose: "Read-only discovery API pagination probe. No Helius calls and no dataset writes.",
+  purpose: "Read-only launch-index pagination depth probe; no Helius calls and no dataset writes.",
   historicalCollectionStarted: false,
   datasetWritten: false,
   pumpOffsetsTested: pumpOffsets,
-  raydiumPagination: "cursor-based nextPageId, using official Raydium SDK example parameters",
+  pumpSortOrdersTested: ["ASC", "DESC"],
+  raydiumPagesTested: raydiumPages.length,
   checks: {
     pumpfunIndexReturnsRows: pumpHasRows,
     raydiumLaunchLabIndexReturnsRows: raydiumHasRows,
-    raydiumCursorObserved
+    raydiumCursorObserved: raydiumCursorObserved
   },
   status: pumpHasRows && raydiumHasRows ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified",
   results
 };
 
-console.log("LAUNCH_DISCOVERY_PROBE_REPORT");
+console.log("LAUNCH_DISCOVERY_DEPTH_REPORT");
 console.log(JSON.stringify(report, null, 2));
 await mkdir("launch-discovery-probe-output", { recursive: true });
 await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\n");
