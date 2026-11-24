@@ -11,24 +11,15 @@ on:
       - "test/**"
       - "scripts/**"
   workflow_dispatch:
-    inputs:
-      start_collection:
-        description: "Start collection only after the metric pipeline is ready"
-        required: true
-        type: boolean
-        default: false
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: "0 */2 * * *"
 
 concurrency:
   group: pumpfun-live-collector
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   collect:
-    # Do not gather live data while metric validation is in progress.
-    # Start manually with start_collection=true when explicitly approved.
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.start_collection == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -40,7 +31,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ndeda/solana-scalping-data
       CAPTURE_MINUTES: "10"
-      RUN_FOR_MINUTES: "295"
+      RUN_FOR_MINUTES: "120"
       HELIUS_TX_MIN_INTERVAL_MS: "350"
       DATA_DIR: ./data
     steps:
