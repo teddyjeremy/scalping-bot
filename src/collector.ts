@@ -252,6 +252,7 @@ function decodePumpCurve(data: Buffer): PumpCurveState | null {
 async function processCurveState(item: TokenState, data: Buffer, slot: number) {
   const curve = decodePumpCurve(data);
   if (!curve) return;
+  if (curve.complete && ensureMetrics(item).priceSource === "pumpswap_pool_vault_reserves_plus_virtual_quote") return;
   // The default pubkey means SOL; a populated quote_mint means an SPL quote asset.
   const quoteMint = curve.quoteMint ?? WRAPPED_SOL_MINT;
   const quoteDecimals = await getMintDecimals(quoteMint);
@@ -546,7 +547,6 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
     for (const id of sub.ammIds) { try { await sub.connection.removeAccountChangeListener(id); } catch {} }
   }
   sub.ammIds = [];
-  sub.ammPoolAddress = poolAddress;
   const refresh = (slot: number) => {
     void recordPumpSwapPoolSnapshot(item, poolAddress, sub.connection, slot).catch(error =>
       console.warn("PumpSwap pool snapshot failed:", item.mint, String(error).slice(0, 160))
@@ -561,6 +561,7 @@ async function subscribePumpSwapPool(item: TokenState, poolAddress: string) {
     const baseVaultId = await sub.connection.onAccountChange(new PublicKey(pool.baseVault), (_info, context) => refresh(context.slot), "confirmed");
     const quoteVaultId = await sub.connection.onAccountChange(new PublicKey(pool.quoteVault), (_info, context) => refresh(context.slot), "confirmed");
     sub.ammIds = [poolId, baseVaultId, quoteVaultId];
+    sub.ammPoolAddress = poolAddress;
     refresh(0);
     console.log("PumpSwap post-graduation pool tracking started:", item.mint, poolAddress);
   } catch (error) {
@@ -878,6 +879,7 @@ async function captureMint(item: TokenState) {
       if (item) void recordDueSnapshots(item, Date.now()).catch(error => console.error("Snapshot error:", String(error)));
     }, 1_000);
     activeSubscriptions.set(mint, { connection, id, curveId, timer });
+    if (item.pumpSwapPoolAddress) void subscribePumpSwapPool(item, item.pumpSwapPoolAddress);
     await persistState();
   } catch (error) { console.error("Could not subscribe to mint", mint, String(error)); }
 }
