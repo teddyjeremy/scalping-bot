@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
-import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
+import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, restoreCollectorState, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const TOKEN_PROGRAMS = new Set([
@@ -67,6 +67,14 @@ type CollectorState = {
   reconcileBefore?: string;
 };
 const statePath = path.join(DATA_DIR, "collector-state.json");
+const qualityPath = path.join(DATA_DIR, "quality", "data-quality-manifest.json");
+let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string[]; quarantinedMints: Record<string, Record<string, unknown>> } = {
+  schemaVersion: 1, generatedAt: Date.now(), rules: [
+    "Only launch records whose top-level Pump instruction data matches the official create/create_v2 discriminator and whose first instruction account is a token mint are eligible.",
+    "A mint directory listed in quarantinedMints is excluded from strategy research; raw evidence is retained for audit.",
+    "Wallet-balance-delta trade estimates are low confidence and are not execution prices or exact volumes."
+  ], quarantinedMints: {}
+};
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
 const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; timer?: NodeJS.Timeout }>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
@@ -325,6 +333,13 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   await persistState();
 }
 
+async function persistQualityManifest() {
+  await mkdir(path.dirname(qualityPath), { recursive: true });
+  qualityManifest.generatedAt = Date.now();
+  await writeFile(qualityPath, JSON.stringify(qualityManifest, null, 2));
+  markQualityManifestDirty();
+}
+
 async function persistState() {
   await mkdir(DATA_DIR, { recursive: true });
   // Concurrent websocket callbacks may persist simultaneously; unique temp files prevent rename races.
@@ -560,14 +575,57 @@ async function loadState() {
     state = JSON.parse(await readFile(statePath, "utf8")) as CollectorState;
     state.tokens ??= {};
     state.seenLaunchSignatures ??= [];
-    // Remove known quote assets accidentally admitted by the previous balance-difference heuristic.
-    for (const mint of INVALID_QUOTE_MINTS) delete state.tokens[mint];
+    try {
+      qualityManifest = JSON.parse(await readFile(qualityPath, "utf8")) as typeof qualityManifest;
+      qualityManifest.quarantinedMints ??= {};
+      qualityManifest.rules ??= [];
+    } catch { /* A new manifest is created below. */ }
+    qualityManifest.quarantinedMints[WRAPPED_SOL_MINT] ??= {
+      status: "excluded", reason: "False launch: wrapped SOL was stored as the mint; inspected launch signature is a Pump buy, not create/create_v2.",
+      launchSignature: "3mR3oyYXHEPWWCUhv3URSCjVXABTUoGDv4eowDGJp5Dv522sghdc66janYMgm7KU4uLYwRmvTXV5CQuV6voRwQUw",
+      rawPath: `raw/pumpfun/${WRAPPED_SOL_MINT}/events.jsonl`, retainedForAudit: true
+    };
+    for (const mint of INVALID_QUOTE_MINTS) {
+      if (state.tokens[mint]) qualityManifest.quarantinedMints[mint] = { status: "excluded", reason: "Quote asset is not a newly launched Pump token.", rawPath: `raw/pumpfun/${mint}/events.jsonl`, retainedForAudit: true };
+      delete state.tokens[mint];
+    }
+    await persistQualityManifest();
   } catch (error) {
     console.error("Checkpoint is invalid; starting a clean state without deleting remote data:", String(error).slice(0, 160));
     state = { tokens: {}, seenLaunchSignatures: [] };
     await persistState();
   }
 }
+async function auditExistingLaunches() {
+  let changed = false;
+  for (const item of Object.values(state.tokens)) {
+    if (item.launchVerified === true) continue;
+    const tx = await fetchTransaction(item.launchSignature);
+    if (!tx) {
+      console.warn("Existing token awaits launch verification; not subscribing yet:", item.mint);
+      continue;
+    }
+    const create = pumpCreateInstructions(tx).find(instruction => instruction.mint === item.mint);
+    const validMint = create ? await isMintAccount(item.mint) : false;
+    if (!create || !validMint) {
+      qualityManifest.quarantinedMints[item.mint] = {
+        status: "excluded", reason: "Stored launch signature does not contain a matching top-level Pump create/create_v2 instruction and token-mint account.",
+        launchSignature: item.launchSignature, rawPath: `raw/pumpfun/${item.mint}/events.jsonl`, retainedForAudit: true
+      };
+      delete state.tokens[item.mint];
+      changed = true;
+      console.warn("Quarantined unverified historical mint:", item.mint);
+    } else {
+      item.launchVerified = true;
+      item.launchInstruction = create.kind;
+      changed = true;
+      console.log("Historical launch verified against Pump IDL discriminator:", item.mint, create.kind);
+    }
+  }
+  if (changed) await persistState();
+  await persistQualityManifest();
+}
+
 async function shutdown(reason: string) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -585,7 +643,8 @@ async function shutdown(reason: string) {
 }
 async function main() {
   await loadState();
-  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && !INVALID_QUOTE_MINTS.has(item.mint));
+  await auditExistingLaunches();
+  const activeTokens = Object.values(state.tokens).filter(item => item.expiresAt > Date.now() && item.launchVerified === true && !INVALID_QUOTE_MINTS.has(item.mint));
   await restoreTokenEvents(activeTokens.map(item => item.mint));
   for (const item of activeTokens) await captureMint(item);
   const discovery = new Connection(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, "confirmed");
