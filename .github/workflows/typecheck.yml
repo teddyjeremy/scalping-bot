@@ -2,12 +2,6 @@ name: Collector typecheck
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "scripts/historical-archive.ts"
-      - "src/launchlab-instructions.ts"
-      - "test/launchlab-instructions.test.ts"
-      - ".github/workflows/typecheck.yml"
 
 jobs:
   typecheck:
