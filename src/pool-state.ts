@@ -113,6 +113,78 @@ export function decodeTokenAccountAmount(data: Buffer, expectedMint: string): bi
   return data.readBigUInt64LE(64);
 }
 
+
+const LAUNCHLAB_MIGRATE_TO_CPSWAP = "885cc8671cda908c";
+const RAYDIUM_CPMM_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+
+export function findLaunchLabCpmmMigration(
+  instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
+  mint: string
+): { pool: string; quoteMint: string } | null {
+  for (const instruction of instructions) {
+    if (String(instruction.programId ?? "") !== "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj") continue;
+    if (typeof instruction.data !== "string" || !Array.isArray(instruction.accounts) || instruction.accounts.length < 6) continue;
+    let bytes: Uint8Array;
+    try { bytes = decodeBase58(instruction.data); } catch { continue; }
+    if (bytes.length < 8) continue;
+    const discriminator = [...bytes.slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    if (discriminator !== LAUNCHLAB_MIGRATE_TO_CPSWAP) continue;
+    const baseMint = String(instruction.accounts[1] ?? "");
+    const quoteMint = String(instruction.accounts[2] ?? "");
+    const pool = String(instruction.accounts[5] ?? "");
+    if (baseMint === mint && quoteMint && pool) return { pool, quoteMint };
+  }
+  return null;
+}
+
+export type RaydiumCpmmPoolState = {
+  poolCreator: string;
+  token0Vault: string;
+  token1Vault: string;
+  lpMint: string;
+  token0Mint: string;
+  token1Mint: string;
+  token0Decimals: number;
+  token1Decimals: number;
+  lpSupplyRaw: bigint;
+  protocolFeesToken0Raw: bigint;
+  protocolFeesToken1Raw: bigint;
+  fundFeesToken0Raw: bigint;
+  fundFeesToken1Raw: bigint;
+  openTime: bigint;
+  creatorFeeOn: number;
+  enableCreatorFee: boolean;
+  creatorFeesToken0Raw: bigint;
+  creatorFeesToken1Raw: bigint;
+};
+
+export function decodeRaydiumCpmmPoolState(data: Buffer): RaydiumCpmmPoolState | null {
+  // The CPMM and LaunchLab account discriminators overlap; callers must verify the account owner program.
+  if (data.length < 413 || !data.subarray(0, 8).equals(LAUNCHLAB_POOL_STATE_DISCRIMINATOR)) return null;
+  return {
+    poolCreator: readKey(data, 40),
+    token0Vault: readKey(data, 72),
+    token1Vault: readKey(data, 104),
+    lpMint: readKey(data, 136),
+    token0Mint: readKey(data, 168),
+    token1Mint: readKey(data, 200),
+    token0Decimals: data[331],
+    token1Decimals: data[332],
+    lpSupplyRaw: data.readBigUInt64LE(333),
+    protocolFeesToken0Raw: data.readBigUInt64LE(341),
+    protocolFeesToken1Raw: data.readBigUInt64LE(349),
+    fundFeesToken0Raw: data.readBigUInt64LE(357),
+    fundFeesToken1Raw: data.readBigUInt64LE(365),
+    openTime: data.readBigUInt64LE(373),
+    creatorFeeOn: data[389],
+    enableCreatorFee: data[390] === 1,
+    creatorFeesToken0Raw: data.readBigUInt64LE(397),
+    creatorFeesToken1Raw: data.readBigUInt64LE(405)
+  };
+}
+
+export const RAYDIUM_CPMM_PROGRAM = RAYDIUM_CPMM_PROGRAM_ID;
+
 const PUMP_SWAP_PROGRAM_ID = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const PUMP_SWAP_BUY_DISCRIMINATORS = new Set(["66063d1201daebea", "b817ee6167c5d33d"]);
 const PUMP_SWAP_SELL_DISCRIMINATORS = new Set(["33e685a4017f83ad", "5df6823ce7e940b2"]);
