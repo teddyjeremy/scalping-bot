@@ -1,11 +1,6 @@
 name: Hugging Face dataset write preflight
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "scripts/hf-dataset-sync.py"
-      - ".github/workflows/hf-write-preflight.yml"
   workflow_dispatch:
 
 permissions:
