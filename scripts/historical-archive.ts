@@ -46,9 +46,9 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
   }
   throw lastError ?? new Error(`No healthy RPC connection for ${method}`);
 }
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; processedSignatures: string[]; tradeCursors?: Record<string, { before?: string; complete: boolean; pages: number }>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, { before?: string; complete: boolean; pages: number }>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
-let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, processedSignatures: [], tradeCursors: {}, launches: {} };
+let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 async function save() {
   await mkdir(ROOT, { recursive: true });
   const temp = cursorPath + ".tmp";
@@ -72,7 +72,7 @@ function keyString(value: unknown): string {
   return String(value ?? "");
 }
 function instructions(tx: ParsedTransactionWithMeta) {
-  return tx.transaction.message.instructions.map(ix => {
+  const topLevel = tx.transaction.message.instructions.map(ix => {
     const item = ix as unknown as { programId?: unknown; data?: unknown; accounts?: unknown[] };
     return { programId: keyString(item.programId), data: item.data, accounts: Array.isArray(item.accounts) ? item.accounts.map(keyString) : [] };
   });
@@ -144,14 +144,14 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   state.programs[program] = progress;
   await save();
 }
-async function collectMintTrades(record: Cursor["launches"][string]) {
+function impliedQuotePrice(quoteRaw: bigint, tokenRaw: bigint, tokenDecimals: number | null, quoteDecimals: number | null): string | null {\n  if (tokenDecimals == null || quoteDecimals == null || tokenRaw <= 0n) return null;\n  const scale = 10n ** 18n;\n  const numerator = quoteRaw * (10n ** BigInt(tokenDecimals)) * scale;\n  const denominator = tokenRaw * (10n ** BigInt(quoteDecimals));\n  const value = numerator / denominator;\n  const whole = value / scale;\n  const fraction = (value % scale).toString().padStart(18, "0").replace(/0+$/, "");\n  return fraction ? `${whole}.${fraction}` : whole.toString();\n}\nasync function collectMintTrades(record: Cursor["launches"][string]) {
   const file = path.join(ROOT, "trades", record.venue, record.mint + ".jsonl");
   await mkdir(path.dirname(file), { recursive: true });
   const until = record.blockTime + CAPTURE_SECONDS;
   const progress = state.tradeCursors![record.mint] ?? { complete: false, pages: 0 };
   while (!progress.complete && progress.pages < MAX_PAGES) {
     const page = await rpc("getSignaturesForAddress(mint)", c => c.getSignaturesForAddress(new PublicKey(record.mint), { limit: 100, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
-    if (!page.length) { progress.complete = true; break; }
+    if (!page.length) { progress.complete = true; state.tradeCursors![record.mint] = progress; await save(); break; }
     let reachedLaunchBoundary = false;
     const lines: string[] = [];
     for (const item of [...page].reverse()) {
@@ -164,7 +164,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       for (const event of decoded) lines.push(JSON.stringify({
         schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
         launchSignature: record.signature, signature: item.signature, slot: item.slot,
-        blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
+        blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, eventTimestamp: event.timestamp,
         side: event.side, user: event.user, tokenAmountRaw: event.tokenAmountRaw.toString(),
         quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(),
         protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
@@ -175,7 +175,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
         preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
         preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
         reserveEvidence: { virtualQuoteReservesRaw: event.virtualQuoteReservesRaw?.toString() ?? null, realQuoteReservesRaw: event.realQuoteReservesRaw?.toString() ?? null, preTradeBaseReserveRaw: event.preTradeBaseReserveRaw?.toString() ?? null, preTradeQuoteReserveRaw: event.preTradeQuoteReserveRaw?.toString() ?? null },
-        dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null }
+        impliedQuotePrice: impliedQuotePrice(event.quoteAmountRaw, event.tokenAmountRaw, tx.meta.preTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? tx.meta.postTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? null, event.quoteMint === "So11111111111111111111111111111111111111112" ? 9 : (tx.meta.preTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals ?? tx.meta.postTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals ?? null)),\n        dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null, tokenDecimalsKnown: tx.meta.preTokenBalances?.some(x => x.mint === record.mint) || tx.meta.postTokenBalances?.some(x => x.mint === record.mint), quoteDecimalsKnown: event.quoteMint === "So11111111111111111111111111111111111111112" || tx.meta.preTokenBalances?.some(x => x.mint === event.quoteMint) || tx.meta.postTokenBalances?.some(x => x.mint === event.quoteMint) }
       }));
     }
     if (lines.length) await appendFile(file, lines.join("\n") + "\n");
