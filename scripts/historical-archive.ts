@@ -117,13 +117,14 @@ function asParsedTransaction(row: HeliusHistoryRow): ParsedTransactionWithMeta |
   return { transaction: row.transaction, meta: row.meta } as ParsedTransactionWithMeta;
 }
 async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
-  const hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }> = [];
+  const hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null; providerRecord: HeliusHistoryRow }> = [];
   const chunkSize = 50;
   for (let offset = 0; offset < rows.length; offset += chunkSize) {
     const chunk = rows.slice(offset, offset + chunkSize);
     const result = await Promise.all(chunk.map(async row => ({
       entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
-      tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
+      tx: asParsedTransaction(row) ?? await fetchTx(row.signature),
+      providerRecord: row
     })));
     hydrated.push(...result);
     console.log(`${label}: hydrated ${Math.min(offset + chunk.length, rows.length)}/${rows.length} transactions`);
@@ -318,11 +319,11 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
     let pagesThisRun = 0;
     while (!source.complete && pagesThisRun < MAX_PAGES) {
       const enhanced = await getHeliusHistoryPage(address, record.blockTime, until, source.paginationToken);
-      let hydrated: Array<{ item: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
+      let hydrated: Array<{ item: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null; providerRecord: HeliusHistoryRow | null }>;
       let reachedLaunchBoundary = false;
       if (enhanced) {
         const pageRows = await hydrateHistoryRows(enhanced.data, `Trade history ${record.venue} ${record.mint}`);
-        hydrated = pageRows.map(row => ({ item: row.entry, tx: row.tx }));
+        hydrated = pageRows.map(row => ({ item: row.entry, tx: row.tx, providerRecord: row.providerRecord }));
         source.paginationToken = enhanced.paginationToken ?? undefined;
         if (!enhanced.data.length || !enhanced.paginationToken) source.complete = true;
       } else {
@@ -331,12 +332,12 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
         const ordered = [...page].reverse();
         reachedLaunchBoundary = ordered.some(item => item.blockTime != null && item.blockTime < record.blockTime);
         const candidates = ordered.filter(item => item.blockTime != null && item.blockTime >= record.blockTime && item.blockTime <= until);
-        hydrated = await Promise.all(candidates.map(async item => ({ item: { signature: item.signature, slot: item.slot, blockTime: item.blockTime ?? null }, tx: await fetchTx(item.signature) })));
+        hydrated = await Promise.all(candidates.map(async item => ({ item: { signature: item.signature, slot: item.slot, blockTime: item.blockTime ?? null }, tx: await fetchTx(item.signature), providerRecord: null })));
         source.before = page[page.length - 1].signature;
         if (reachedLaunchBoundary || page.length < 100) source.complete = true;
       }
       const lines: string[] = [];
-      for (const { item, tx } of hydrated) {
+      for (const { item, tx, providerRecord } of hydrated) {
         if (item.blockTime == null) continue;
         if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${item.signature}; checkpoint remains on this page.`);
         lines.push(JSON.stringify({
@@ -351,7 +352,9 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
           logMessages: tx.meta.logMessages ?? [],
           transaction: tx.transaction,
-          metaError: tx.meta.err ?? null
+          metaError: tx.meta.err ?? null,
+          providerSource: providerRecord ? "helius_getTransactionsForAddress" : "solana_getParsedTransaction_fallback",
+          rawProviderRecord: providerRecord ?? null
         }));
         if (tx.meta.err) {
           lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
