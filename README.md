@@ -12,7 +12,7 @@ This repository contains the first-stage **research data collector**. It does no
 - Captures transactions mentioning that mint for up to the configured first 10 minutes.
 - Stores the launch transaction fee payer separately. Creator identity is left null until decoded from authoritative launch-event data; fee payer is not silently labelled as creator.
 - Persists state and a remote Hugging Face checkpoint, restores active token event files, and saves Pump and LaunchLab signature cursors. On later runs it reconciles missed program transactions in bounded pages and saves page cursors so reconciliation can resume.
-- Serializes parsed-transaction fetches across up to three Helius API keys, deduplicates repeated signatures and applies exponential backoff on rate limits.
+- Paces read RPC calls independently across up to three Helius API keys (including transaction fetches, account/supply reads, signature pagination and subscriptions), deduplicates repeated signatures and applies exponential backoff on rate limits.
 
 ## Market, price and trading metrics (schema version 3)
 
@@ -42,7 +42,7 @@ The collector does not yet decode PumpSwap/Raydium CPMM pool reserves and LP dep
 3. Launch detection now uses the Pump create/create_v2 instruction layout and token-program ownership validation. Continue validating against known launch signatures before using the dataset for strategy conclusions.
 4. The first-10-minute capture is bounded from the launch transaction timestamp. Delayed indexing can mean a few seconds of initial activity are missed.
 5. A mint subscription is not a complete universal trade feed for every venue. Add PumpSwap/Raydium/Orca pool subscriptions and pool-specific decoders as the next step.
-6. The collector records raw evidence. It does not yet label snipers/insiders or assert wallet relationships. Those require transaction-graph analysis and cautious heuristics.
+6. The collector records raw evidence. It does not yet label snipers/insiders or assert wallet relationships. Those require transaction-graph analysis and cautious heuristics. Pump post-graduation pool tracking, exact per-trade fee decoding, StonkFun pool/swap decoding, and historical November 1–23 backfill remain separate incomplete work; do not treat them as implemented.
 
 ## Supported launchpads and data quality
 
@@ -52,11 +52,11 @@ StonkFun currently uses Raydium LaunchLab. The collector recognizes LaunchLab `i
 
 The collector validates Pump launches using the exact top-level instruction discriminators from the official Pump IDL (`create` and `create_v2`), then checks that the first instruction account is owned by SPL Token or Token-2022. A generic log word such as `Create` is not launch evidence: associated-token-account creation can appear in unrelated buy transactions.
 
-The Hugging Face dataset includes `quality/data-quality-manifest.json`. Consumers must exclude every mint listed under `quarantinedMints`. When a bad directory is identified, its original JSONL is copied to `quarantine/pumpfun/<MINT>/events.jsonl` and the original `raw/pumpfun/<MINT>/events.jsonl` path is replaced by an exclusion marker. The original bytes are retained for audit rather than silently deleted. The previously stored wrapped-SOL directory is explicitly quarantined because its recorded "launch" transaction is a Pump buy instruction, not a token creation. On startup, existing checkpoint entries are revalidated against their launch signatures before subscriptions resume. A transaction that cannot be fetched remains pending verification and is not used for collection.
+The Hugging Face dataset includes `quality/data-quality-manifest.json`. Consumers must exclude every mint listed under `quarantinedMints`. When a bad directory is identified, its original JSONL is copied to `quarantine/pumpfun/<MINT>/events.jsonl` and the original `raw/pumpfun/<MINT>/events.jsonl` path is replaced by an exclusion marker. The original bytes are retained for audit rather than silently deleted. The previously stored wrapped-SOL directory is a confirmed false positive: its recorded "launch" transaction is a Pump buy instruction, not a token creation. The guarded cleanup workflow deletes that exact invalid raw file and removes its checkpoint reference; it does not delete other token directories. On startup, existing checkpoint entries are revalidated against top-level venue-specific launch instructions and token-mint ownership before subscriptions resume. A transaction that cannot be fetched remains pending verification and is not used for collection.
 
 Transaction fetches are serialized and rate-limited across configured Helius keys, with exponential backoff on HTTP 429 and signature-level deduplication. If activity enrichment fails or the quote mint is not known yet, the signature is checkpointed and retried. On collector restart, the most recent 100 signatures per still-active mint are checked to recover part of the missed first-ten-minute activity window. This protects the provider quota; if incoming activity exceeds the configured request budget, delayed transaction enrichment is possible and should be monitored.
 
-Run `npm test` to check the strict Pump and StonkFun launch decoders and their false-positive cases. Hugging Face writes are batched every two minutes to stay below the free repository commit-rate limit; failed batches remain dirty and retry on the next interval.
+Run `npm test` to check the strict Pump and StonkFun launch decoders, top-level-only instruction selection and false-positive cases. Hugging Face writes are batched every two minutes to stay below the free repository commit-rate limit; failed batches remain dirty and retry on the next interval.
 
 ## Setup
 
@@ -86,7 +86,7 @@ Each JSONL line is an independent event, so partial files survive normal process
 
 ## Free Hugging Face dataset storage
 
-The collector uploads changed token JSONL files and its checkpoint in batches every 30 seconds to a Hugging Face dataset repository. Failed uploads are retained for the next scheduled retry; they do not trigger an unbounded immediate retry loop. Remote checkpoints are schema-validated before they can replace local state.
+The collector uploads changed token JSONL files and its checkpoint in batches every 120 seconds to a Hugging Face dataset repository. Failed uploads are retained for the next scheduled retry; they do not trigger an unbounded immediate retry loop. Remote checkpoints are schema-validated before they can replace local state.
 
 1. Create a Hugging Face access token with **Write** permission at https://huggingface.co/settings/tokens.
 2. Set `HF_TOKEN` in your local `.env` and set `HF_DATASET_REPO=ndeda/solana-scalping-data`.
