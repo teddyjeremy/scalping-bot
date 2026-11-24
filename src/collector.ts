@@ -360,9 +360,6 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     realTokenReservesUi: realToken, highPriceQuote: metrics.highPriceQuote, lowPriceQuote: metrics.lowPriceQuote, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
-  metrics.processedTradeSignatures!.push(signature);
-  if (metrics.processedTradeSignatures!.length > 20_000) metrics.processedTradeSignatures = metrics.processedTradeSignatures!.slice(-10_000);
-  await persistState();
   await recordDueSnapshots(item, Date.now());
   await persistState();
 }
@@ -942,7 +939,7 @@ async function subscribeRaydiumCpmmPool(item: TokenState, poolAddress: string) {
   };
   try {
     const poolInfo = await sub.connection.getAccountInfo(new PublicKey(poolAddress), "confirmed");
-    if (!poolInfo || !poolInfo.owner.equals(RAYDIUM_CPMM_PROGRAM)) return;
+    if (!poolInfo || !poolInfo.owner.equals(new PublicKey(RAYDIUM_CPMM_PROGRAM))) return;
     const pool = decodeRaydiumCpmmPoolState(poolInfo.data);
     if (!pool || (pool.token0Mint !== item.mint && pool.token1Mint !== item.mint)) return;
     const poolId = await sub.connection.onAccountChange(new PublicKey(poolAddress), (_info, context) => refresh(context.slot), "confirmed");
