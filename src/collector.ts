@@ -88,6 +88,7 @@ const nextRpc = () => rateLimitConnection(rpc[(rpcCursor++) % rpc.length]);
 
 type TokenMetrics = {
   tradeCount: number; buyCount: number; sellCount: number;
+  buyVolumeQuote?: number; sellVolumeQuote?: number; netFlowQuote?: number;
   volumeSol: number; volumeUsd: number; volumeQuote: number; volumeSolAvailable?: boolean; volumeUsdAvailable?: boolean;
   launchlabReserveRatioQuote?: number | null; launchlabRealBase?: number | null; launchlabRealQuote?: number | null; launchlabPoolStatus?: string | null;
   uniqueBuyers: string[]; uniqueSellers: string[];
@@ -198,7 +199,7 @@ async function getSolUsd(): Promise<number | null> {
 }
 function ensureMetrics(item: TokenState): TokenMetrics {
   const metrics = item.metrics ??= {
-    tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0, volumeQuote: 0,
+    tradeCount: 0, buyCount: 0, sellCount: 0, buyVolumeQuote: 0, sellVolumeQuote: 0, netFlowQuote: 0, volumeSol: 0, volumeUsd: 0, volumeQuote: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
     lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null, highPriceQuote: null, lowPriceQuote: null,
     snapshotsRecorded: [], maxDrawdownPct: null,
@@ -216,6 +217,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.largestSellSol = Number.isFinite(metrics.largestSellSol) ? metrics.largestSellSol : 0;
   metrics.largestBuyQuote = Number.isFinite(metrics.largestBuyQuote) ? metrics.largestBuyQuote : 0;
   metrics.largestSellQuote = Number.isFinite(metrics.largestSellQuote) ? metrics.largestSellQuote : 0;
+  metrics.buyVolumeQuote ??= 0; metrics.sellVolumeQuote ??= 0; metrics.netFlowQuote ??= 0;
   metrics.uniqueBuyers ??= [];
   metrics.uniqueSellers ??= [];
   metrics.walletProfiles ??= {};
@@ -475,6 +477,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         launchlabRealQuote: isStonkFun ? metrics.launchlabRealQuote ?? null : null,
         launchlabPoolStatus: isStonkFun ? metrics.launchlabPoolStatus ?? null : null,
         tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
+        buyVolumeQuote: metrics.buyVolumeQuote, sellVolumeQuote: metrics.sellVolumeQuote, netFlowQuote: metrics.netFlowQuote,
+        buySellVolumeRatio: (metrics.sellVolumeQuote ?? 0) > 0 ? (metrics.buyVolumeQuote ?? 0) / (metrics.sellVolumeQuote ?? 0) : null,
+        averageBuySizeQuote: metrics.buyCount > 0 ? (metrics.buyVolumeQuote ?? 0) / metrics.buyCount : null,
+        averageSellSizeQuote: metrics.sellCount > 0 ? (metrics.sellVolumeQuote ?? 0) / metrics.sellCount : null,
         volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null,
         volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
         tradeCountIsEstimate: (metrics.estimatedTradeCount ?? 0) > 0,
@@ -674,11 +680,15 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     metrics.volumeQuote += trade.quoteAmount;
     if (trade.side === "buy") {
       metrics.buyCount++;
+      metrics.buyVolumeQuote = (metrics.buyVolumeQuote ?? 0) + trade.quoteAmount;
+      metrics.netFlowQuote = (metrics.netFlowQuote ?? 0) + trade.quoteAmount;
       if (!metrics.uniqueBuyers.includes(trade.wallet)) metrics.uniqueBuyers.push(trade.wallet);
       metrics.largestBuyQuote = Math.max(metrics.largestBuyQuote, trade.quoteAmount);
       metrics.largestBuySol = Math.max(metrics.largestBuySol, trade.solAmount);
     } else {
       metrics.sellCount++;
+      metrics.sellVolumeQuote = (metrics.sellVolumeQuote ?? 0) + trade.quoteAmount;
+      metrics.netFlowQuote = (metrics.netFlowQuote ?? 0) - trade.quoteAmount;
       if (!metrics.uniqueSellers.includes(trade.wallet)) metrics.uniqueSellers.push(trade.wallet);
       metrics.largestSellQuote = Math.max(metrics.largestSellQuote, trade.quoteAmount);
       metrics.largestSellSol = Math.max(metrics.largestSellSol, trade.solAmount);
@@ -731,6 +741,11 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     blockTime: tx.blockTime, observations,
     quoteMint, quoteSymbol: metrics.quoteSymbol ?? null,
     tradeVolumeQuote: observations.reduce((sum, trade) => sum + trade.quoteAmount, 0),
+    buyVolumeQuote: metrics.buyVolumeQuote, sellVolumeQuote: metrics.sellVolumeQuote,
+    netFlowQuote: metrics.netFlowQuote,
+    buySellVolumeRatio: (metrics.sellVolumeQuote ?? 0) > 0 ? (metrics.buyVolumeQuote ?? 0) / (metrics.sellVolumeQuote ?? 0) : null,
+    averageBuySizeQuote: metrics.buyCount > 0 ? (metrics.buyVolumeQuote ?? 0) / metrics.buyCount : null,
+    averageSellSizeQuote: metrics.sellCount > 0 ? (metrics.sellVolumeQuote ?? 0) / metrics.sellCount : null,
     tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
     volumeSol: metrics.volumeSolAvailable ? metrics.volumeSol : null, volumeUsd: metrics.volumeUsdAvailable ? metrics.volumeUsd : null, volumeQuote: metrics.volumeQuote,
     largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol, largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
