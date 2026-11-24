@@ -205,10 +205,32 @@ export function reconstructTokenResearch(events: Array<Record<string, unknown>>)
   const prices: PricePoint[] = [];
   const trades: TradePoint[] = [];
   const holderEvents: Array<Record<string, unknown>> = [];
+  const activitySignatures = new Set<string>();
+  let duplicateActivitySignatures = 0;
+  let activityEvents = 0, activityWithTransactionMetadata = 0, activityMissingTransactionMetadata = 0;
+  let failedActivityTransactions = 0, curveStateSnapshots = 0, marketSnapshots = 0, poolStateSnapshots = 0;
+  let exactTradeObservations = 0, estimatedTradeObservations = 0;
+  const eventLagSeconds: number[] = [];
   const fees = { networkFeeLamports: 0, transactionCount: 0, failedTransactionCount: 0, computeUnitsConsumed: 0 };
   const launch = events.find(event => event.kind === "launch_detected");
   for (const event of events) {
     const observedAt = typeof event.observedAt === "number" ? event.observedAt : null;
+    if (event.kind === "curve_state") curveStateSnapshots++;
+    if (event.kind === "market_snapshot") marketSnapshots++;
+    if (event.kind === "launchlab_pool_state" || event.kind === "pumpswap_pool_state" || event.kind === "raydium_cpmm_pool_state") poolStateSnapshots++;
+    if (event.kind === "token_activity" || event.kind === "token_activity_backfill" || event.kind === "token_activity_enriched") {
+      activityEvents++;
+      if (typeof event.signature === "string") {
+        if (activitySignatures.has(event.signature)) duplicateActivitySignatures++;
+        activitySignatures.add(event.signature);
+      }
+      const transaction = event.transaction && typeof event.transaction === "object" ? event.transaction as Record<string, unknown> : null;
+      if (transaction) {
+        activityWithTransactionMetadata++;
+        if (transaction.err != null) failedActivityTransactions++;
+        if (typeof transaction.blockTime === "number" && observedAt != null) eventLagSeconds.push(observedAt / 1000 - transaction.blockTime);
+      } else activityMissingTransactionMetadata++;
+    }
     if (event.kind === "curve_state" && observedAt != null && typeof event.priceQuote === "number") {
       prices.push({ at: observedAt, price: event.priceQuote, source: typeof event.pricingMethod === "string" ? event.pricingMethod : "curve_state_unknown_source" });
     }
