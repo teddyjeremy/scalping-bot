@@ -226,9 +226,9 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     // Custom-pair Holder Rewards can override the creator component; exact event values take precedence.
     estimatedProtocolFeeBps: 95,
     configuredCreatorFeeBps: curve.creatorFeeBps?.toString() ?? null,
-    estimatedCreatorFeeBps: curve.isHolderReward ? null : (curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
-    estimatedTotalCurveFeeBps: curve.isHolderReward ? null : 95 + (curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
-    feeRateSource: curve.isHolderReward ? "holder_rewards_rate_not_yet_decoded" : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate" : "published_pump_bonding_curve_schedule",
+    estimatedCreatorFeeBps: curve.isHolderReward ? null : (isSol || isUsdc ? 30 : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
+    estimatedTotalCurveFeeBps: curve.isHolderReward ? null : 95 + (isSol || isUsdc ? 30 : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30),
+    feeRateSource: curve.isHolderReward ? "holder_rewards_rate_not_yet_decoded" : isSol || isUsdc ? "published_sol_usdc_bonding_curve_schedule" : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? "bonding_curve_account_creator_fee_bps_plus_published_protocol_rate" : "published_custom_pair_schedule",
     feeIsEstimateNotExecution: true,
     creatorFeeMayBeOverriddenByHolderRewards: true,
     realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
