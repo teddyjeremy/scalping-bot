@@ -157,8 +157,9 @@ function decodeLaunchLab(data: Buffer, targetMint: string, instructions: Array<{
   try {
     const r = new Reader(data); r.offset = 8;
     const pool = r.key();
-    r.u64(); r.u64(); r.u64();
-    const realBaseBefore = r.u64(); const realQuoteBefore = r.u64(); r.u64(); r.u64();
+    r.u64();
+    const virtualBaseAfter = r.u64(); const virtualQuoteAfter = r.u64();
+    r.u64(); r.u64(); r.u64(); r.u64();
     const amountIn = r.u64(); const amountOut = r.u64();
     const protocolFeeRaw = r.u64(); const platformFeeRaw = r.u64();
     const creatorFeeRaw = r.u64(); const shareFeeRaw = r.u64();
@@ -175,7 +176,8 @@ function decodeLaunchLab(data: Buffer, targetMint: string, instructions: Array<{
       cashbackRaw: null, buybackFeeRaw: null, protocolFeeBps: null, lpFeeBps: null,
       creatorFeeBps: null, instructionName: null, pool, creator: null, feeRecipient: null,
       virtualQuoteReservesRaw: null, realQuoteReservesRaw: null,
-      preTradeBaseReserveRaw: realBaseBefore, preTradeQuoteReserveRaw: realQuoteBefore
+      preTradeBaseReserveRaw: side === "buy" ? virtualBaseAfter + amountOut : virtualBaseAfter > amountIn ? virtualBaseAfter - amountIn : 0n,
+      preTradeQuoteReserveRaw: side === "buy" ? virtualQuoteAfter > amountIn ? virtualQuoteAfter - amountIn : 0n : virtualQuoteAfter + amountOut
     };
   } catch { return null; }
 }
