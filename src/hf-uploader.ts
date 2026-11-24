@@ -127,14 +127,14 @@ export async function restoreTokenEvents(tokens: Array<{ mint: string; venue?: s
   }));
 }
 
-export async function flushHuggingFaceUploads() {
+export async function flushHuggingFaceUploads(drain = false) {
   if (!token) {
     if (!warnedMissingToken) { console.warn("HF_TOKEN is not set; dataset uploads are disabled."); warnedMissingToken = true; }
     return;
   }
   if (flushPromise) {
     await flushPromise;
-    if (dirtyMints.size > 0 || stateDirty || qualityDirty) await flushHuggingFaceUploads();
+    if (drain && (dirtyMints.size > 0 || stateDirty || qualityDirty)) await flushHuggingFaceUploads(true);
     return;
   }
   if (dirtyMints.size === 0 && !stateDirty && !qualityDirty) return;
@@ -176,6 +176,6 @@ export async function flushHuggingFaceUploads() {
   })();
   await flushPromise;
   flushPromise = null;
-  if (!batchFailed && (dirtyMints.size > 0 || stateDirty || qualityDirty)) await flushHuggingFaceUploads();
+  if (drain && !batchFailed && (dirtyMints.size > 0 || stateDirty || qualityDirty)) await flushHuggingFaceUploads(true);
 }
-setInterval(() => { void flushHuggingFaceUploads(); }, 30_000).unref();
+setInterval(() => { void flushHuggingFaceUploads(); }, 120_000).unref();
