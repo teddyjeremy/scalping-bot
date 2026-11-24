@@ -70,12 +70,18 @@ async function checkHistory(label, address, requireRows) {
   }
   if (rows.length) {
     const sample = rows[0];
-    if (!sample.signature || typeof sample.slot !== "number") {
-      throw new Error(`${label}: sample is missing transaction signature or slot.`);
+    const signatures = sample.transaction?.signatures;
+    const nestedSignature = Array.isArray(signatures)
+      ? (typeof signatures[0] === "string" ? signatures[0] : signatures[0]?.signature)
+      : null;
+    const signature = sample.signature ?? nestedSignature;
+    if (typeof signature !== "string" || typeof sample.slot !== "number") {
+      console.log(`${label}: row keys=${Object.keys(sample).join(",")}; transaction keys=${sample.transaction ? Object.keys(sample.transaction).join(",") : "none"}`);
+      throw new Error(`${label}: sample is missing transaction signature or slot after full-row normalization.`);
     }
     if (enhanced && (!sample.transaction || !sample.meta)) {
       const hydrated = await rpc(keys[0], "getTransaction", [
-        sample.signature,
+        signature,
         { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }
       ]);
       if (!hydrated || !hydrated.meta) {
