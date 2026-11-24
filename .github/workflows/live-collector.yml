@@ -54,6 +54,7 @@ jobs:
         run: npm test
       - name: Publish preflight verification
         if: always()
+        continue-on-error: true
         env:
           VERIFICATION_STAGE: preflight
           JOB_STATUS: ${{ job.status }}
@@ -65,6 +66,7 @@ jobs:
         run: npm start
       - name: Publish collector result
         if: always()
+        continue-on-error: true
         env:
           VERIFICATION_STAGE: collector
           JOB_STATUS: ${{ job.status }}
