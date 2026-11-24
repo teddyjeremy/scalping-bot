@@ -7,6 +7,9 @@ export type PaperPosition = {
   peakPrice: number;
   lastPrice: number;
   estimatedEntryCostQuote: number;
+  estimatedEntryFeeQuote?: number | null;
+  estimatedExitFeeQuote?: number | null;
+  netRealizedPnlQuote?: number | null;
   estimatedExitValueQuote?: number;
   exitAt?: number;
   exitReason?: string;
@@ -60,7 +63,7 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   const dangerSignals: string[] = [];
   if (input.creatorSelling) dangerSignals.push("creator_or_creator_fee_payer_selling");
   if (input.reserveDropPct != null && input.reserveDropPct <= -20) dangerSignals.push("curve_or_pool_quote_reserves_dropped_20_percent");
-  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_exit_price_impact_at_least_5_percent");
+  if (input.priceImpactPctForOneDollar != null && input.priceImpactPctForOneDollar >= 5) dangerSignals.push("one_dollar_curve_price_impact_at_least_5_percent");
   if (position?.status === "open") {
     if (input.price == null || input.price <= 0) return { action: "hold", score, reasons: ["price_feed_missing_or_invalid_hold_last_known_mark"], dangerSignals: [...dangerSignals, "price_feed_missing_or_invalid"], position };
     const drawdown = position.peakPrice > 0 ? (input.price / position.peakPrice - 1) * 100 : 0;
@@ -69,12 +72,15 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
     if (input.price == null || input.price <= 0) dangerSignals.push("price_feed_missing_or_invalid");
     if (dangerSignals.length) {
       const reason = dangerSignals[0];
+      const exitValue = position.quantity * input.price;
+      const exitFee = input.venueFeePctPerSide == null ? null : exitValue * input.venueFeePctPerSide / 100;
+      const entryFee = position.estimatedEntryFeeQuote ?? null;
+      const netPnl = exitFee == null || entryFee == null ? null : exitValue - exitFee - position.estimatedEntryCostQuote - entryFee;
       const closed: PaperPosition = {
-        ...position, status: "closed", lastPrice: input.price ?? position.lastPrice,
-        peakPrice: Math.max(position.peakPrice, input.price ?? 0), exitAt: input.now,
-        exitReason: reason,
-        estimatedExitValueQuote: input.price == null ? 0 : position.quantity * input.price,
-        realizedPnlQuote: input.price == null ? -position.estimatedEntryCostQuote : position.quantity * input.price - position.estimatedEntryCostQuote
+        ...position, status: "closed", lastPrice: input.price,
+        peakPrice: Math.max(position.peakPrice, input.price), exitAt: input.now,
+        exitReason: reason, estimatedExitValueQuote: exitValue, estimatedExitFeeQuote: exitFee,
+        realizedPnlQuote: exitValue - position.estimatedEntryCostQuote, netRealizedPnlQuote: netPnl
       };
       return { action: "exit", score, reasons: [reason], dangerSignals, position: closed };
     }
@@ -83,8 +89,12 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
       const trailingDrawdown = peak > 0 ? (input.price / peak - 1) * 100 : 0;
       const trailingStopPct = Math.min(15, Math.max(6, 8 + (input.volatilityPct ?? 1) * 1.5));
       if (trailingDrawdown <= -trailingStopPct) {
-        const closed: PaperPosition = { ...position, status: "closed", peakPrice: peak, lastPrice: input.price, exitAt: input.now, exitReason: "adaptive_volatility_adjusted_trailing_drawdown", estimatedExitValueQuote: position.quantity * input.price, realizedPnlQuote: position.quantity * input.price - position.estimatedEntryCostQuote };
-        return { action: "exit", score, reasons: ["adaptive_10_percent_trailing_drawdown"], dangerSignals, position: closed };
+        const exitValue = position.quantity * input.price;
+        const exitFee = input.venueFeePctPerSide == null ? null : exitValue * input.venueFeePctPerSide / 100;
+        const entryFee = position.estimatedEntryFeeQuote ?? null;
+        const netPnl = exitFee == null || entryFee == null ? null : exitValue - exitFee - position.estimatedEntryCostQuote - entryFee;
+        const closed: PaperPosition = { ...position, status: "closed", peakPrice: peak, lastPrice: input.price, exitAt: input.now, exitReason: "adaptive_volatility_adjusted_trailing_drawdown", estimatedExitValueQuote: exitValue, estimatedExitFeeQuote: exitFee, realizedPnlQuote: exitValue - position.estimatedEntryCostQuote, netRealizedPnlQuote: netPnl };
+        return { action: "exit", score, reasons: ["adaptive_volatility_adjusted_trailing_drawdown"], dangerSignals, position: closed };
       }
       return { action: "hold", score, reasons: ["position_open_no_emergency_exit_signal"], dangerSignals, position: { ...position, peakPrice: peak, lastPrice: input.price } };
     }
@@ -104,6 +114,7 @@ export function evaluateScalpDecision(input: StrategyInput, position?: PaperPosi
   const opened: PaperPosition = {
     status: "open", entryAt: input.now, entryPrice: input.price, quantity,
     peakPrice: input.price, lastPrice: input.price, estimatedEntryCostQuote: paperSizeQuote,
+    estimatedEntryFeeQuote: input.venueFeePctPerSide == null ? null : paperSizeQuote * input.venueFeePctPerSide / 100,
     entryScore: score
   };
   return { action: "enter", score, reasons: ["security_passed_and_early_momentum_score_60_plus"], dangerSignals, position: opened };
