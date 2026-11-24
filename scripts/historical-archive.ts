@@ -246,6 +246,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   const addresses = [...new Set([record.mint, record.pool, curve].filter((v): v is string => Boolean(v)))];
   const progress: MintTradeCursor = state.tradeCursors![record.mint] ?? { complete: false, pages: 0, sources: {} };
   progress.sources ??= {};
+  for (const persistedAddress of Object.keys(progress.sources)) if (!addresses.includes(persistedAddress)) addresses.push(persistedAddress);
   for (let sourceIndex = 0; sourceIndex < addresses.length; sourceIndex++) {
     const address = addresses[sourceIndex];
     const source: TradeSourceCursor = progress.sources[address] ?? { complete: false, pages: 0 };
