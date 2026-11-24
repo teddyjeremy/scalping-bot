@@ -14,86 +14,91 @@ const PUMP_MINT_AUTHORITY = PublicKey.findProgramAddressSync(
   [Buffer.from("mint-authority")], new PublicKey(PUMP)
 )[0].toBase58();
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
-const START = Math.floor(Date.parse("2026-11-01T00:00:00Z") / 1000);
-const END = Math.floor(Date.parse("2026-11-24T00:00:00Z") / 1000);
+const addresses = [
+  { name: "Pump.fun mint-authority history", address: PUMP_MINT_AUTHORITY },
+  { name: "Raydium LaunchLab program history", address: LAUNCHLAB }
+];
+let rpcCalls = 0;
 
 async function rpc(key, method, params = []) {
+  rpcCalls++;
   const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${key}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: "solana-v3-preflight", method, params })
+    body: JSON.stringify({ jsonrpc: "2.0", id: `solana-v3-preflight-${rpcCalls}`, method, params }),
+    signal: AbortSignal.timeout(20_000)
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`${method} HTTP ${response.status}: ${text.slice(0, 180)}`);
-  const body = JSON.parse(text);
+  const bodyText = await response.text();
+  if (!response.ok) throw new Error(`${method} HTTP ${response.status}: ${bodyText.slice(0, 180)}`);
+  let body;
+  try { body = JSON.parse(bodyText); }
+  catch { throw new Error(`${method} returned invalid JSON.`); }
   if (body.error) throw new Error(`${method} RPC ${body.error.code}: ${body.error.message}`);
+  if (body.result === undefined) throw new Error(`${method} response has no result.`);
   return body.result;
 }
 
+const keyHealth = [];
 for (let i = 0; i < keys.length; i++) {
-  const version = await rpc(keys[i], "getVersion");
-  if (!version || typeof version["solana-core"] !== "string") {
-    throw new Error(`Helius key slot ${i + 1} returned an invalid getVersion response.`);
+  const [version, slot] = await Promise.all([
+    rpc(keys[i], "getVersion"),
+    rpc(keys[i], "getSlot", ["confirmed"])
+  ]);
+  if (!version?.["solana-core"] || !Number.isSafeInteger(slot) || slot <= 0) {
+    throw new Error(`Helius key slot ${i + 1} failed standard RPC validation.`);
   }
-  console.log(`Helius key slot ${i + 1}: authenticated; Solana core ${version["solana-core"]}`);
+  keyHealth.push({ keySlot: i + 1, status: "ok", solanaCore: version["solana-core"], confirmedSlot: slot });
 }
 
-async function checkHistory(label, address, requireRows) {
-  const options = {
-    transactionDetails: "full",
-    sortOrder: "asc",
-    limit: 2,
-    commitment: "confirmed",
-    encoding: "jsonParsed",
-    maxSupportedTransactionVersion: 1,
-    filters: { blockTime: { gte: START, lte: END }, status: "any" }
-  };
-  let rows = null;
-  let enhanced = true;
-  try {
-    const result = await rpc(keys[0], "getTransactionsForAddress", [address, options]);
-    if (!result || !Array.isArray(result.data)) {
-      throw new Error("getTransactionsForAddress returned an unexpected result shape.");
-    }
-    rows = result.data;
-    console.log(`${label}: enhanced history supported; sampled rows=${rows.length}; paginationToken=${result.paginationToken ? "present" : "none"}`);
-  } catch (error) {
-    const message = String(error);
-    if (!/method not found|not available|not supported|unauthorized|forbidden|401|403/i.test(message)) throw error;
-    enhanced = false;
-    const signatures = await rpc(keys[0], "getSignaturesForAddress", [address, { limit: 2 }, "confirmed"]);
-    rows = signatures.map(row => ({ signature: row.signature, slot: row.slot, blockTime: row.blockTime }));
-    console.log(`${label}: enhanced history unavailable; standard RPC fallback returned ${rows.length} signatures`);
+const historyChecks = [];
+for (const item of addresses) {
+  const firstPage = await rpc(keys[0], "getSignaturesForAddress", [
+    item.address, { limit: 2, commitment: "confirmed" }
+  ]);
+  if (!Array.isArray(firstPage) || firstPage.length === 0) {
+    throw new Error(`${item.name}: standard getSignaturesForAddress returned no signatures.`);
   }
-  if (requireRows && !rows.length) {
-    throw new Error(`${label}: no indexed transactions were returned for the required historical scan address.`);
+  const first = firstPage[0];
+  if (typeof first.signature !== "string" || !Number.isSafeInteger(first.slot)) {
+    throw new Error(`${item.name}: signature page is missing signature or slot fields.`);
   }
-  if (rows.length) {
-    const sample = rows[0];
-    const signatures = sample.transaction?.signatures;
-    const nestedSignature = Array.isArray(signatures)
-      ? (typeof signatures[0] === "string" ? signatures[0] : signatures[0]?.signature)
-      : null;
-    const signature = sample.signature ?? nestedSignature;
-    if (typeof signature !== "string" || typeof sample.slot !== "number") {
-      console.log(`${label}: row keys=${Object.keys(sample).join(",")}; transaction keys=${sample.transaction ? Object.keys(sample.transaction).join(",") : "none"}`);
-      throw new Error(`${label}: sample is missing transaction signature or slot after full-row normalization.`);
-    }
-    if (enhanced && (!sample.transaction || !sample.meta)) {
-      const hydrated = await rpc(keys[0], "getTransaction", [
-        signature,
-        { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }
-      ]);
-      if (!hydrated || !hydrated.meta) {
-        throw new Error(`${label}: sample transaction could not be hydrated with metadata.`);
-      }
-      console.log(`${label}: transaction hydration fallback verified.`);
-    } else if (enhanced) {
-      console.log(`${label}: full transaction and metadata included in history response.`);
-    }
+
+  const nextPage = await rpc(keys[0], "getSignaturesForAddress", [
+    item.address, { limit: 2, before: firstPage[firstPage.length - 1].signature, commitment: "confirmed" }
+  ]);
+  if (!Array.isArray(nextPage)) throw new Error(`${item.name}: pagination response was not an array.`);
+  const firstPageSignatures = new Set(firstPage.map(row => row.signature));
+  if (nextPage.some(row => firstPageSignatures.has(row.signature))) {
+    throw new Error(`${item.name}: before-cursor pagination returned a duplicate signature.`);
   }
+
+  const transaction = await rpc(keys[0], "getTransaction", [
+    first.signature,
+    { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+  ]);
+  if (!transaction?.meta || !transaction?.transaction?.signatures?.length) {
+    throw new Error(`${item.name}: getTransaction did not return transaction signatures and metadata.`);
+  }
+
+  historyChecks.push({
+    address: item.name,
+    firstPageRows: firstPage.length,
+    secondPageRows: nextPage.length,
+    paginationCursorAdvanced: nextPage.length === 0 || !firstPageSignatures.has(nextPage[0].signature),
+    sampleSignature: first.signature,
+    sampleSlot: first.slot,
+    sampleBlockTime: first.blockTime ?? null,
+    transactionMetadataPresent: true
+  });
 }
 
-await checkHistory("Pump.fun mint-authority index", PUMP_MINT_AUTHORITY, true);
-await checkHistory("Raydium LaunchLab program index", LAUNCHLAB, false);
-console.log("Helius preflight passed. No historical coin scan or dataset write was performed.");
+console.log(JSON.stringify({
+  status: "standard_rpc_preflight_passed",
+  collectionStarted: false,
+  enhancedHistoricalEndpointUsed: false,
+  keys: keyHealth,
+  standardHistory: historyChecks,
+  rpcCalls,
+  quotaNote: "This preflight counts requests only. It does not claim to measure remaining monthly credits or that three keys multiply the account quota.",
+  coverageNote: "This verifies standard RPC access, pagination and transaction hydration on current indexed samples. It does not prove the full November archive has been traversed."
+}, null, 2));
