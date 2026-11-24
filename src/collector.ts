@@ -558,7 +558,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const observedAt = tx.blockTime ? tx.blockTime * 1000 : Date.now();
   for (const trade of observations) {
     const fundingSources = extractFundingSources(tx, trade.wallet);
-    metrics.walletProfiles[trade.wallet] = updateWalletProfile(metrics.walletProfiles[trade.wallet], trade, {
+    metrics.walletProfiles[trade.wallet] = updateWalletProfile(metrics.walletProfiles[trade.wallet], { ...trade, confidence: trade.confidence }, {
       observedAt, slot, launchSlot: item.launchSlot ?? slot, launchAt: item.firstSeenAt,
       launchFeePayer: item.launchFeePayer ?? null, creator: item.creator, fundingSources
     });
