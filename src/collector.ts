@@ -115,7 +115,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; buyPriceImpactSamples?: number[]; sellPriceImpactSamples?: number[]; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -223,7 +223,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.buyPriceImpactSamples ??= []; metrics.sellPriceImpactSamples ??= []; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
@@ -508,6 +508,10 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         venueTradeFeesQuote: metrics.venueTradeFeesQuote, venueTradeFeesBase: metrics.venueTradeFeesBase,
         inputTransferFeesQuote: metrics.inputTransferFeesQuote, outputTransferFeesQuote: metrics.outputTransferFeesQuote,
         inputTransferFeesBase: metrics.inputTransferFeesBase, outputTransferFeesBase: metrics.outputTransferFeesBase,
+        avgBuyPriceImpactPct: metrics.buyPriceImpactSamples?.length ? metrics.buyPriceImpactSamples.reduce((a, b) => a + b, 0) / metrics.buyPriceImpactSamples.length : null,
+        avgSellPriceImpactPct: metrics.sellPriceImpactSamples?.length ? metrics.sellPriceImpactSamples.reduce((a, b) => a + b, 0) / metrics.sellPriceImpactSamples.length : null,
+        maxBuyPriceImpactPct: metrics.buyPriceImpactSamples?.length ? Math.max(...metrics.buyPriceImpactSamples) : null,
+        maxSellPriceImpactPct: metrics.sellPriceImpactSamples?.length ? Math.max(...metrics.sellPriceImpactSamples) : null,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
         curveRealSolReserves: metrics.curveRealSolReserves ?? null,
@@ -627,6 +631,10 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
       metrics.quoteSymbol = isSol ? "SOL" : quoteMint === USDC_MINT ? "USDC" : quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
       metrics.volumeSolAvailable = isSol;
       metrics.volumeUsdAvailable = quoteUsd != null;
+      const preBase = event.preTradeBaseReserveRaw != null ? Number(event.preTradeBaseReserveRaw) / (10 ** item.supplyDecimals) : null;
+      const preQuote = event.preTradeQuoteReserveRaw != null ? Number(event.preTradeQuoteReserveRaw) / (10 ** quoteDecimals) : null;
+      const preTradeSpotPriceQuote = preBase != null && preBase > 0 && preQuote != null && preQuote > 0 ? preQuote / preBase : null;
+      const priceImpactPct = preTradeSpotPriceQuote != null ? (event.side === "buy" ? (priceQuote / preTradeSpotPriceQuote - 1) * 100 : (preTradeSpotPriceQuote / priceQuote - 1) * 100) : null;
       const feeUi = (raw: bigint | null) => raw == null ? null : Number(raw) / (10 ** quoteDecimals);
       const baseFeeUi = (raw: bigint | null) => raw == null || item.supplyDecimals == null ? null : Number(raw) / (10 ** item.supplyDecimals);
       observations.push({
@@ -651,6 +659,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
         outputTransferFeeBase: event.side === "buy" ? baseFeeUi(event.outputTransferFeeRaw ?? null) : null,
         inputTransferFeeRaw: event.inputTransferFeeRaw?.toString() ?? null,
         outputTransferFeeRaw: event.outputTransferFeeRaw?.toString() ?? null,
+        preTradeSpotPriceQuote, priceImpactPct,
         cashbackFeeQuote: feeUi(event.cashbackRaw), buybackFeeQuote: feeUi(event.buybackFeeRaw),
         protocolFeeBps: event.protocolFeeBps == null ? null : Number(event.protocolFeeBps),
         lpFeeBps: event.lpFeeBps == null ? null : Number(event.lpFeeBps),
@@ -686,6 +695,11 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.lpFeeQuote != null) metrics.lpFeesQuote = (metrics.lpFeesQuote ?? 0) + trade.lpFeeQuote;
     if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
     if (trade.buybackFeeQuote != null) metrics.buybackFeesQuote = (metrics.buybackFeesQuote ?? 0) + trade.buybackFeeQuote;
+    if (trade.priceImpactPct != null) {
+      const samples = trade.side === "buy" ? metrics.buyPriceImpactSamples! : metrics.sellPriceImpactSamples!;
+      samples.push(trade.priceImpactPct);
+      if (samples.length > 2_000) samples.splice(0, samples.length - 2_000);
+    }
     if (trade.venueTradeFeeQuote != null) metrics.venueTradeFeesQuote = (metrics.venueTradeFeesQuote ?? 0) + trade.venueTradeFeeQuote;
     if (trade.venueTradeFeeBase != null) metrics.venueTradeFeesBase = (metrics.venueTradeFeesBase ?? 0) + trade.venueTradeFeeBase;
     if (trade.inputTransferFeeBase != null) metrics.inputTransferFeesBase = (metrics.inputTransferFeesBase ?? 0) + trade.inputTransferFeeBase;
