@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
@@ -368,6 +369,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
   const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
   const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
+  const sourceHash = createHash("sha256");
   const seen = new Set<string>();
   const buyers = new Set<string>();
   const sellers = new Set<string>();
@@ -377,6 +379,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   let duplicateEvents = 0;
   for (const name of names) {
     const content = await readFile(path.join(directory, name), "utf8");
+    sourceHash.update(name);
+    sourceHash.update(content);
     for (const line of content.split("\n")) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as Record<string, unknown>;
@@ -463,9 +467,10 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     const data = group as { walletProfiles?: WalletProfile[] };
     return (data.walletProfiles ?? []).filter(p => p.launchFeePayer).map(p => p.wallet);
   }))];
+  const sourcePageFingerprint = sourceHash.digest("hex");
   const summary = {
     schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,
-    sourcePageCount: names.length, sourcePageFiles: names,
+    sourcePageCount: names.length, sourcePageFiles: names, sourcePageFingerprint,
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
@@ -482,10 +487,12 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
 async function summaryNeedsRefresh(record: Cursor["launches"][string]): Promise<boolean> {
   const summaryPath = path.join(ROOT, "launches", record.venue, record.mint + ".summary.json");
   try {
-    const summary = JSON.parse(await readFile(summaryPath, "utf8")) as { sourcePageCount?: number };
+    const summary = JSON.parse(await readFile(summaryPath, "utf8")) as { sourcePageCount?: number; sourcePageFingerprint?: string; creator?: string | null; launchFeePayer?: string | null };
     const directory = path.join(ROOT, "trades", record.venue, record.mint);
-    const pageCount = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).length;
-    return summary.sourcePageCount !== pageCount;
+    const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
+    const hash = createHash("sha256");
+    for (const name of names) { hash.update(name); hash.update(await readFile(path.join(directory, name))); }
+    return summary.sourcePageCount !== names.length || summary.sourcePageFingerprint !== hash.digest("hex") || summary.creator !== record.creator || summary.launchFeePayer !== record.feePayer;
   } catch {
     return true;
   }
