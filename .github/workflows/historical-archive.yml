@@ -85,7 +85,7 @@ jobs:
       - name: Run unit tests
         run: npm test
       - name: Scan historical launches and first ten minutes of trades
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: npm run historical:archive
       - name: Upload resumable archive to Hugging Face dataset
         if: always()
