@@ -213,7 +213,11 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     return;
   }
   const decimals = item.supplyDecimals ?? 6;
-  if (item.supplyDecimals == null || !Number.isInteger(item.supplyDecimals) || item.supplyDecimals < 0 || item.supplyDecimals > 18) {\n    await appendTokenEvent(item.mint, { schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, quoteMint, pricingAvailable: false, reason: "Token decimals are not verified; refusing to assume six decimals." });\n    return;\n  }\n  const tokenDivisor = 10 ** decimals, quoteDivisor = 10 ** quoteDecimals;
+  if (item.supplyDecimals == null || !Number.isInteger(item.supplyDecimals) || item.supplyDecimals < 0 || item.supplyDecimals > 18) {
+    await appendTokenEvent(item.mint, { schemaVersion: 4, kind: "curve_state", mint: item.mint, slot, quoteMint, pricingAvailable: false, reason: "Token decimals are not verified; refusing to assume six decimals." });
+    return;
+  }
+  const tokenDivisor = 10 ** decimals, quoteDivisor = 10 ** quoteDecimals;
   const virtualToken = Number(curve.virtualTokenRaw) / tokenDivisor;
   const virtualQuote = Number(curve.virtualSolLamports) / quoteDivisor;
   const realToken = Number(curve.realTokenRaw) / tokenDivisor;
@@ -489,9 +493,8 @@ function getAccountKey(key: unknown): string {
   return String(key);
 }
 function transactionInstructions(tx: ParsedTransactionWithMeta) {
-  const topLevel = tx.transaction.message.instructions as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>;
-  const inner = (tx.meta?.innerInstructions ?? []).flatMap(group => group.instructions) as unknown as Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>;
-  return [...topLevel, ...inner];
+  // Only message-level instructions can prove a launch; CPI instructions are not launch evidence.
+  return getTopLevelInstructions(tx.transaction.message as unknown as { instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }> });
 }
 function pumpCreateInstructions(tx: ParsedTransactionWithMeta) {
   return findPumpCreateInstructions(transactionInstructions(tx), PUMP_PROGRAM.toBase58());
