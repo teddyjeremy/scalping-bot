@@ -71,7 +71,7 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
   try {
     const page = await rpc("getTransactionsForAddress", async connection => {
       const keyIndex = connections.indexOf(connection);
-      const response = await fetch(\`https://mainnet.helius-rpc.com/?api-key=\${keys[keyIndex]}\`, {
+      const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${keys[keyIndex]}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -85,8 +85,8 @@ async function getHeliusHistoryPage(address: string, start: number, end: number,
         })
       });
       const body = await response.json() as { result?: HeliusHistoryPage; error?: { code?: number; message?: string } };
-      if (!response.ok) throw new Error(\`Helius history HTTP \${response.status}: \${JSON.stringify(body.error ?? {})}\`);
-      if (body.error) throw new Error(\`Helius history RPC \${body.error.code ?? ""}: \${body.error.message ?? "unknown error"}\`);
+      if (!response.ok) throw new Error(`Helius history HTTP ${response.status}: ${JSON.stringify(body.error ?? {})}`);
+      if (body.error) throw new Error(`Helius history RPC ${body.error.code ?? ""}: ${body.error.message ?? "unknown error"}`);
       if (!body.result || !Array.isArray(body.result.data)) throw new Error("Helius history RPC returned an unexpected response shape.");
       return body.result;
     });
@@ -202,7 +202,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     }
     for (const { entry, tx } of hydrated) {
       if (entry.blockTime == null) continue;
-      if (!tx || !tx.meta) throw new Error(\`Missing historical transaction metadata for \${entry.signature}; checkpoint remains on this page.\`);
+      if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
       if (!tx.meta.err) {
         const top = instructions(tx);
         const launches = venue === "pumpfun"
@@ -213,14 +213,14 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
           const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool };
           state.launches[launch.mint] = record;
           await writeLaunch(record, tx);
-          console.log(\`Archived \${venue} launch \${launch.mint} at \${new Date(entry.blockTime * 1000).toISOString()}\`);
+          console.log(`Archived ${venue} launch ${launch.mint} at ${new Date(entry.blockTime * 1000).toISOString()}`);
         }
       }
     }
     state.programs[program] = progress;
     await save();
     pages++;
-    console.log(\`Historical \${venue}: page \${pages}/\${MAX_PAGES}, launches archived=\${Object.keys(state.launches).length}, enhancedHistory=\${enhancedHistorySupport === true}\`);
+    console.log(`Historical ${venue}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
@@ -273,7 +273,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       const lines: string[] = [];
       for (const { item, tx } of hydrated) {
         if (item.blockTime == null) continue;
-        if (!tx || !tx.meta) throw new Error(\`Missing historical transaction metadata for \${item.signature}; checkpoint remains on this page.\`);
+        if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${item.signature}; checkpoint remains on this page.`);
         if (tx.meta.err) {
           lines.push(JSON.stringify({ schemaVersion: 1, recordType: "historical_failed_transaction", venue: record.venue, mint: record.mint, signature: item.signature, slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, sourceAddress: address, err: tx.meta.err, transactionFeeLamports: tx.meta.fee, computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null, signers: signers(tx), logMessages: tx.meta.logMessages ?? [] }));
           continue;
@@ -313,7 +313,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
           }));
         }
       }
-      const pageFile = path.join(directory, \`source-\${sourceIndex}-page-\${String(source.pages + 1).padStart(6, "0")}.jsonl\`);
+      const pageFile = path.join(directory, `source-${sourceIndex}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
       await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
       source.pages++;
       if (!enhanced && (reachedLaunchBoundary || hydrated.length < 100)) source.complete = true;
