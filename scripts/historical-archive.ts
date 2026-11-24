@@ -19,6 +19,7 @@ const END = Math.floor(new Date(process.env.HISTORY_END ?? "2026-11-24T00:00:00Z
 const ROOT = process.env.DATA_DIR ?? "./historical-data";
 const PAGE_SIZE = 100;
 const MAX_PAGES = Math.max(1, Number(process.env.HISTORY_MAX_PAGES_PER_RUN ?? 20));
+const MAX_LAUNCHLAB_PAGES = Math.max(1, Number(process.env.HISTORY_MAX_LAUNCHLAB_PAGES_PER_RUN ?? 5));
 const CAPTURE_SECONDS = 600;
 const MIN_RPC_INTERVAL_MS = Math.max(100, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? 2000));
 const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, process.env.HELIUS_API_KEY_3].filter((v): v is string => Boolean(v));
@@ -151,12 +152,13 @@ async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
 }
 type TradeSourceCursor = { before?: string; paginationToken?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
+type LaunchLabIndexCursor = { nextPageId?: string; complete: boolean; pages: number; lastCreateAt?: number };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launchLabIndexes?: Record<string, LaunchLabIndexCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 const mintShard = (mint: string) => createHash("sha256").update(mint).digest("hex").slice(0, 2);
 const launchRecordPath = (record: { venue: string; mint: string }, suffix = ".json") => path.join(ROOT, "launches", record.venue, mintShard(record.mint), record.mint + suffix);
 const tradeRecordDirectory = (record: { venue: string; mint: string }) => path.join(ROOT, "trades", record.venue, mintShard(record.mint), record.mint);
-let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
+let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launchLabIndexes: {}, launches: {} };
 let saveQueue: Promise<void> = Promise.resolve();
 let uploadQueue: Promise<void> = Promise.resolve();
 const dirtyFiles = new Set<string>();
@@ -191,6 +193,7 @@ async function load() {
     if (parsed.schemaVersion !== 1 || parsed.start !== START || parsed.end !== END || !parsed.programs || !parsed.launches) throw new Error("Checkpoint schema/date range mismatch");
     state = parsed;
     state.tradeCursors ??= {};
+    state.launchLabIndexes ??= {};
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -210,7 +213,7 @@ function instructions(tx: ParsedTransactionWithMeta) {
   return [...topLevel, ...inner];
 }
 async function fetchTx(signature: string): Promise<ParsedTransactionWithMeta | null> {
-  return rpc("getParsedTransaction", connection => connection.getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }));
+  return rpc("getParsedTransaction", connection => connection.getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 }));
 }
 function signers(tx: ParsedTransactionWithMeta): string[] {
   const keys = tx.transaction.message.accountKeys;
@@ -310,6 +313,166 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   state.programs[program] = progress;
   await save();
 }
+type LaunchLabIndexRow = {
+  mint?: string;
+  createAt?: number | string;
+  creator?: string;
+  poolId?: string;
+  pool?: string;
+  id?: string;
+  platformInfo?: { pubKey?: string; name?: string };
+  mintB?: { address?: string };
+};
+
+async function fetchLaunchLabIndexPage(platformConfig: string, nextPageId?: string) {
+  const params = new URLSearchParams({
+    platformId: platformConfig,
+    sort: "new",
+    size: "100",
+    mintType: "default",
+    includeNsfw: "false"
+  });
+  if (nextPageId) params.set("nextPageId", nextPageId);
+  const response = await fetch(`https://launch-mint-v1.raydium.io/get/list?${params.toString()}`, {
+    headers: { accept: "application/json", "user-agent": "solana-research-archive/1.0" },
+    signal: AbortSignal.timeout(25_000)
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`Raydium LaunchLab index HTTP ${response.status}: ${raw.slice(0, 250)}`);
+  let body: { success?: boolean; msg?: string; data?: { rows?: LaunchLabIndexRow[]; nextPageId?: string | null } };
+  try { body = JSON.parse(raw) as typeof body; }
+  catch { throw new Error("Raydium LaunchLab index returned invalid JSON."); }
+  if (body.success !== true || !Array.isArray(body.data?.rows)) {
+    throw new Error(`Raydium LaunchLab index response was not successful: ${body.msg ?? "unexpected response shape"}`);
+  }
+  return { rows: body.data.rows, nextPageId: body.data.nextPageId ?? undefined };
+}
+
+async function verifyAndPersistStonkFunLaunch(row: LaunchLabIndexRow, platformConfig: string) {
+  const mint = typeof row.mint === "string" ? row.mint : "";
+  const createAtMs = Number(row.createAt);
+  if (!mint || !Number.isFinite(createAtMs)) throw new Error("LaunchLab index row is missing mint or createAt.");
+  if (row.platformInfo?.pubKey !== platformConfig) {
+    throw new Error(`LaunchLab platform mismatch for ${mint}: expected ${platformConfig}, got ${row.platformInfo?.pubKey ?? "missing"}`);
+  }
+
+  const expectedBlockTime = Math.floor(createAtMs / 1000);
+  let before: string | undefined;
+  let launchFound = false;
+  for (let pageNumber = 1; pageNumber <= 10 && !launchFound; pageNumber++) {
+    const signatures = await rpc("getSignaturesForAddress(StonkFun mint)", connection =>
+      connection.getSignaturesForAddress(new PublicKey(mint), {
+        limit: 1000,
+        commitment: "confirmed",
+        ...(before ? { before } : {})
+      }, "confirmed")
+    );
+    if (!signatures.length) break;
+
+    const candidates = signatures.filter(entry =>
+      entry.blockTime != null && Math.abs(entry.blockTime - expectedBlockTime) <= 30
+    );
+    for (const entry of candidates) {
+      const tx = await fetchTx(entry.signature);
+      if (!tx?.meta) throw new Error(`Missing transaction metadata for StonkFun mint ${mint} signature ${entry.signature}; page cursor remains unchanged.`);
+      if (tx.meta.err) continue;
+      const launch = findStonkFunLaunchInstructions(instructions(tx), LAUNCHLAB, STONK_CONFIGS)
+        .find(item => item.mint === mint && item.platformConfig === platformConfig);
+      if (!launch) continue;
+
+      const apiPool = row.poolId ?? row.pool ?? row.id ?? null;
+      if (apiPool && launch.pool !== apiPool) {
+        throw new Error(`LaunchLab pool mismatch for ${mint}: API=${apiPool}, decoded=${launch.pool}`);
+      }
+      const apiCreator = row.creator ?? null;
+      if (apiCreator && launch.creator !== apiCreator) {
+        throw new Error(`LaunchLab creator mismatch for ${mint}: API=${apiCreator}, decoded=${launch.creator}`);
+      }
+      const apiQuoteMint = row.mintB?.address ?? null;
+      if (apiQuoteMint && launch.quoteMint !== apiQuoteMint) {
+        throw new Error(`LaunchLab quote mint mismatch for ${mint}: API=${apiQuoteMint}, decoded=${launch.quoteMint}`);
+      }
+
+      const record = {
+        venue: "stonkfun",
+        mint,
+        signature: entry.signature,
+        slot: entry.slot,
+        blockTime: entry.blockTime!,
+        creator: launch.creator,
+        feePayer: launch.payer,
+        quoteMint: launch.quoteMint,
+        pool: launch.pool
+      };
+      state.launches[mint] = record;
+      await writeLaunch(record, tx);
+      await save();
+      await uploadDirtyFiles();
+      console.log(`Archived verified StonkFun launch ${mint} at ${new Date(record.blockTime * 1000).toISOString()} config=${platformConfig}`);
+      launchFound = true;
+      break;
+    }
+
+    const oldest = signatures[signatures.length - 1];
+    if (!oldest?.signature || oldest.blockTime == null || oldest.blockTime <= expectedBlockTime + 30) break;
+    before = oldest.signature;
+  }
+
+  if (!launchFound) {
+    throw new Error(`Could not verify StonkFun LaunchLab initialize instruction for ${mint} at ${new Date(createAtMs).toISOString()} under config ${platformConfig}; index cursor remains on this page.`);
+  }
+}
+
+async function scanStonkFunIndex() {
+  const platformConfigs = [...STONK_CONFIGS];
+  for (const platformConfig of platformConfigs) {
+    let progress = state.launchLabIndexes![platformConfig] ?? { complete: false, pages: 0 };
+    if (progress.complete) continue;
+    let pagesThisRun = 0;
+
+    while (pagesThisRun < MAX_LAUNCHLAB_PAGES && !progress.complete) {
+      const page = await fetchLaunchLabIndexPage(platformConfig, progress.nextPageId);
+      if (!page.rows.length) {
+        throw new Error(`StonkFun LaunchLab index returned an empty page before proving the November 1 boundary for config ${platformConfig}.`);
+      }
+
+      const timestamps = page.rows.map(row => Number(row.createAt));
+      if (timestamps.some(value => !Number.isFinite(value))) {
+        throw new Error(`StonkFun LaunchLab index page contains a row without createAt for config ${platformConfig}.`);
+      }
+      const pageNewest = Math.max(...timestamps);
+      const pageOldest = Math.min(...timestamps);
+      if (progress.lastCreateAt != null && pageNewest > progress.lastCreateAt) {
+        throw new Error(`StonkFun LaunchLab pagination moved forward in time for config ${platformConfig}; refusing to advance cursor.`);
+      }
+
+      for (const row of page.rows) {
+        const mint = row.mint;
+        const createdAt = Number(row.createAt);
+        if (!mint || row.platformInfo?.pubKey !== platformConfig) {
+          throw new Error(`StonkFun LaunchLab index returned a malformed or cross-platform row for config ${platformConfig}.`);
+        }
+        if (createdAt < START * 1000 || createdAt >= END * 1000) continue;
+        if (state.launches[mint]?.venue === "stonkfun") continue;
+        await verifyAndPersistStonkFunLaunch(row, platformConfig);
+      }
+
+      progress.pages++;
+      pagesThisRun++;
+      progress.lastCreateAt = pageOldest;
+      progress.nextPageId = page.nextPageId;
+      progress.complete = pageOldest <= START * 1000;
+      if (!progress.complete && !progress.nextPageId) {
+        throw new Error(`StonkFun LaunchLab index ended before the November 1 boundary for config ${platformConfig}.`);
+      }
+      state.launchLabIndexes![platformConfig] = progress;
+      await save();
+      await uploadDirtyFiles();
+      console.log(`StonkFun index config=${platformConfig} page=${progress.pages} launches=${Object.values(state.launches).filter(item => item.venue === "stonkfun").length} complete=${progress.complete}`);
+    }
+  }
+}
+
 function impliedQuotePrice(quoteRaw: bigint, tokenRaw: bigint, tokenDecimals: number | null, quoteDecimals: number | null): string | null {
   if (tokenDecimals == null || quoteDecimals == null || tokenRaw <= 0n) return null;
   const scale = 10n ** 18n;
@@ -720,7 +883,7 @@ async function main() {
   // fans out requests across the three independently paced Helius keys.
   const pumpScan = await Promise.allSettled([scanProgram(PUMP, "pumpfun")]);
   if (await finishBatch(pumpScan)) return;
-  const stonkScan = await Promise.allSettled([scanProgram(LAUNCHLAB, "stonkfun")]);
+  const stonkScan = await Promise.allSettled([scanStonkFunIndex()]);
   if (await finishBatch(stonkScan)) return;
   const records = Object.values(state.launches);
   let nextRecord = 0;
