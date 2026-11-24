@@ -47,6 +47,24 @@ const enhancedHistory = enhancedHistoryResponse.ok && !enhancedHistoryBody.error
   ? { available: true, sampleCount: enhancedHistoryBody.result.data.length }
   : { available: false, reason: enhancedHistoryBody.error?.message ?? `HTTP ${enhancedHistoryResponse.status}`, fallback: "standard Solana RPC history" };
 
+const pumpMintAuthority = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"))[0].toBase58();
+const pumpCreateIndexResponse = await fetch(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    jsonrpc: "2.0", id: "preflight-pump-create-index", method: "getTransactionsForAddress",
+    params: [pumpMintAuthority, {
+      transactionDetails: "signatures", sortOrder: "asc", limit: 1, commitment: "confirmed",
+      filters: { blockTime: { gte: 1793491200, lte: 1795478400 }, status: "any" }
+    }]
+  }),
+  signal: AbortSignal.timeout(20_000)
+});
+const pumpCreateIndexBody = await pumpCreateIndexResponse.json() as { result?: { data?: unknown[] }; error?: { code?: number; message?: string } };
+const pumpCreateIndex = pumpCreateIndexResponse.ok && !pumpCreateIndexBody.error && Array.isArray(pumpCreateIndexBody.result?.data) && pumpCreateIndexBody.result.data.length > 0
+  ? { available: true, sampleCount: pumpCreateIndexBody.result.data.length }
+  : { available: false, reason: pumpCreateIndexBody.error?.message ?? `HTTP ${pumpCreateIndexResponse.status}`, fallbackRequired: true };
+
 const response = await fetch(`https://huggingface.co/api/datasets/${dataset}`, {
   headers: { Authorization: `Bearer ${hfToken}` },
   signal: AbortSignal.timeout(20_000)
