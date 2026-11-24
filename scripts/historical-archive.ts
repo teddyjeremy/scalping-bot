@@ -1,11 +1,12 @@
 import "dotenv/config";
 import { Connection, PublicKey, type ParsedTransactionWithMeta } from "@solana/web3.js";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
 import { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
+import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "../src/wallet-analytics.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
@@ -205,6 +206,8 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
             launchSignature: record.signature, signature: item.signature, sourceAddress: address,
             slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
             eventTimestamp: event.timestamp, side: event.side, user: event.user,
+            creator: record.creator, launchFeePayer: record.feePayer, launchSlot: record.slot, launchTime: record.blockTime,
+            transactionFeePayer: signers(tx)[0] ?? null, fundingSources: extractFundingSources(tx, event.user),
             tokenAmountRaw: event.tokenAmountRaw.toString(), tokenDecimals,
             quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(), quoteDecimals,
             protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
@@ -238,6 +241,121 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
   }
   return progress.complete;
 }
+async function buildMintResearchSummary(record: Cursor["launches"][string]) {
+  const directory = path.join(ROOT, "trades", record.venue, record.mint);
+  const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
+  const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
+  const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
+  const seen = new Set<string>();
+  const buyers = new Set<string>();
+  const sellers = new Set<string>();
+  let buyEvents = 0;
+  let sellEvents = 0;
+  let missingDecimalEvents = 0;
+  let duplicateEvents = 0;
+  for (const name of names) {
+    const content = await readFile(path.join(directory, name), "utf8");
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.recordType !== "historical_trade_event") continue;
+      const signature = String(event.signature ?? "");
+      const user = String(event.user ?? "");
+      const side = event.side === "buy" || event.side === "sell" ? event.side : null;
+      const quoteMint = String(event.quoteMint ?? "");
+      const tokenRaw = BigInt(String(event.tokenAmountRaw ?? "0"));
+      const quoteRaw = BigInt(String(event.quoteAmountRaw ?? "0"));
+      const dedupe = [signature, user, side, tokenRaw.toString(), quoteRaw.toString(), quoteMint].join(":");
+      if (!signature || !user || !side || !quoteMint || tokenRaw <= 0n || quoteRaw <= 0n) continue;
+      if (seen.has(dedupe)) { duplicateEvents++; continue; }
+      seen.add(dedupe);
+      if (side === "buy") { buyEvents++; buyers.add(user); } else { sellEvents++; sellers.add(user); }
+      const tokenDecimals = typeof event.tokenDecimals === "number" ? event.tokenDecimals : null;
+      const quoteDecimals = typeof event.quoteDecimals === "number" ? event.quoteDecimals : null;
+      const tokenAmount = tokenDecimals == null ? null : Number(tokenRaw) / (10 ** tokenDecimals);
+      const quoteAmount = quoteDecimals == null ? null : Number(quoteRaw) / (10 ** quoteDecimals);
+      const at = Number(event.blockTime) * 1000;
+      const slot = Number(event.slot);
+      const price = typeof event.impliedQuotePrice === "string" ? Number(event.impliedQuotePrice) : NaN;
+      if (Number.isFinite(price) && price > 0) {
+        const path = pricesByQuoteMint.get(quoteMint) ?? [];
+        path.push({ at, price, slot });
+        pricesByQuoteMint.set(quoteMint, path);
+      }
+      if (tokenAmount == null || quoteAmount == null || !Number.isFinite(tokenAmount) || !Number.isFinite(quoteAmount) || tokenAmount <= 0 || quoteAmount <= 0) {
+        missingDecimalEvents++;
+        continue;
+      }
+      const profiles = profilesByQuoteMint.get(quoteMint) ?? {};
+      profiles[user] = updateWalletProfile(profiles[user], {
+        wallet: user, side, tokenAmount, quoteAmount, confidence: "high"
+      }, {
+        observedAt: at, slot, launchSlot: record.slot, launchAt: record.blockTime * 1000,
+        launchFeePayer: record.feePayer, creator: record.creator,
+        fundingSources: Array.isArray(event.fundingSources) ? event.fundingSources.filter((v): v is string => typeof v === "string") : [],
+        signature, feePayer: typeof event.transactionFeePayer === "string" ? event.transactionFeePayer : null,
+        networkFeeLamports: typeof event.transactionFeeLamports === "number" ? event.transactionFeeLamports : 0
+      });
+      profilesByQuoteMint.set(quoteMint, profiles);
+    }
+  }
+  const priceSummaryByQuoteMint: Record<string, unknown> = {};
+  for (const [quoteMint, points] of pricesByQuoteMint) {
+    points.sort((a, b) => a.at - b.at || a.slot - b.slot);
+    const first = points[0];
+    const last = points[points.length - 1];
+    const high = Math.max(...points.map(p => p.price));
+    const low = Math.min(...points.map(p => p.price));
+    let peak = first.price;
+    let maxDrawdownPct = 0;
+    for (const point of points) {
+      peak = Math.max(peak, point.price);
+      maxDrawdownPct = Math.max(maxDrawdownPct, peak > 0 ? ((peak - point.price) / peak) * 100 : 0);
+    }
+    const horizons = [30, 60, 120, 180, 300, 600];
+    const priceAt = Object.fromEntries(horizons.map(seconds => {
+      const point = points.find(p => p.at >= record.blockTime * 1000 + seconds * 1000);
+      return [String(seconds), point ? { price: point.price, observedAt: point.at } : null];
+    }));
+    priceSummaryByQuoteMint[quoteMint] = {
+      quoteMint, observationCount: points.length, firstPrice: first.price, lastPrice: last.price,
+      highPrice: high, lowPrice: low, returnPct: first.price > 0 ? ((last.price / first.price) - 1) * 100 : null,
+      maxDrawdownPct, priceAtSecondsAfterLaunch: priceAt,
+      priceUnit: "quote asset " + quoteMint + " per whole token",
+      caveat: "Trade-implied price from decoded event amounts; not an oracle USD price or guaranteed executable quote."
+    };
+  }
+  const cohortsByQuoteMint: Record<string, unknown> = {};
+  for (const [quoteMint, profiles] of profilesByQuoteMint) {
+    const latestPrice = (priceSummaryByQuoteMint[quoteMint] as { lastPrice?: number } | undefined)?.lastPrice ?? null;
+    cohortsByQuoteMint[quoteMint] = {
+      summary: summarizeWalletCohorts(profiles, latestPrice),
+      walletProfiles: Object.values(profiles).sort((a, b) => b.quoteSpent - a.quoteSpent)
+    };
+  }
+  const creatorWallets = [...new Set(Object.values(cohortsByQuoteMint).flatMap(group => {
+    const data = group as { walletProfiles?: WalletProfile[] };
+    return (data.walletProfiles ?? []).filter(p => p.creator).map(p => p.wallet);
+  }))];
+  const feePayerWallets = [...new Set(Object.values(cohortsByQuoteMint).flatMap(group => {
+    const data = group as { walletProfiles?: WalletProfile[] };
+    return (data.walletProfiles ?? []).filter(p => p.launchFeePayer).map(p => p.wallet);
+  }))];
+  const summary = {
+    schemaVersion: 1, recordType: "historical_launch_research_summary", venue: record.venue, mint: record.mint,
+    launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
+    creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
+    tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
+    developerActivity: { creatorWallets, launchFeePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
+    priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
+    dataQuality: {
+      historicalUsdPrice: false, historicalFdv: false, historicalTotalSupply: false,
+      historicalHolderSnapshots: false, transactionEventAmounts: "decoded program events",
+      walletClassification: "heuristics only; bot/sniper/bundle labels are candidates, not proof"
+    }
+  };
+  await writeFile(path.join(ROOT, "launches", record.venue, record.mint + ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
+}
 async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
   await load();
@@ -247,6 +365,7 @@ async function main() {
   for (const record of Object.values(state.launches)) {
     if (state.tradeCursors?.[record.mint]?.complete) continue;
     await collectMintTrades(record);
+    if (state.tradeCursors?.[record.mint]?.complete) await buildMintResearchSummary(record);
   }
   console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete])))}`);
 }
