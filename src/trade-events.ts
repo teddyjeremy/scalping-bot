@@ -195,7 +195,19 @@ export function decodeProgramTradeEvents(
       else if (program === PUMP_AMM_PROGRAM && discriminator.equals(PUMP_AMM_SELL)) event = decodePumpAmm(bytes, "sell");
       else if (program === LAUNCHLAB_PROGRAM && discriminator.equals(LAUNCHLAB_TRADE)) event = decodeLaunchLab(bytes, targetMint, instructions);
       else if (program === RAYDIUM_CPMM_PROGRAM && discriminator.equals(Buffer.from([64, 198, 205, 232, 38, 8, 113, 226]))) {
-        event = decodeRaydiumCpmmTradeEvent(bytes, targetMint, instructions, data => new Reader(data));
+        const raydium = decodeRaydiumCpmmTradeEvent(bytes, targetMint, instructions, data => new Reader(data));
+        event = raydium ? {
+          ...raydium,
+          protocolFeeRaw: raydium.tradeFeeMint === raydium.quoteMint ? raydium.tradeFeeRaw : null,
+          platformFeeRaw: null, lpFeeRaw: null,
+          creatorFeeRaw: raydium.creatorFeeMint === raydium.quoteMint ? raydium.creatorFeeRaw : null,
+          shareFeeRaw: null, cashbackRaw: null, buybackFeeRaw: null,
+          protocolFeeBps: null, lpFeeBps: null, creatorFeeBps: null,
+          instructionName: null, feeRecipient: null, creator: null,
+          virtualQuoteReservesRaw: null, realQuoteReservesRaw: null,
+          venueTradeFeeRaw: raydium.tradeFeeRaw, venueTradeFeeMint: raydium.tradeFeeMint,
+          inputTransferFeeRaw: raydium.inputTransferFeeRaw, outputTransferFeeRaw: raydium.outputTransferFeeRaw
+        } : null;
       }
       if (!event) continue;
       if (event.venue === "pumpswap") event.mint = targetMint;
