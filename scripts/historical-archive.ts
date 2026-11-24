@@ -315,8 +315,8 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     points.sort((a, b) => a.at - b.at || a.slot - b.slot);
     const first = points[0];
     const last = points[points.length - 1];
-    const high = Math.max(...points.map(p => p.price));
-    const low = Math.min(...points.map(p => p.price));
+    const high = points.reduce((value, point) => Math.max(value, point.price), Number.NEGATIVE_INFINITY);
+    const low = points.reduce((value, point) => Math.min(value, point.price), Number.POSITIVE_INFINITY);
     let peak = first.price;
     let maxDrawdownPct = 0;
     for (const point of points) {
@@ -332,6 +332,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       quoteMint, observationCount: points.length, firstPrice: first.price, lastPrice: last.price,
       highPrice: high, lowPrice: low, returnPct: first.price > 0 ? ((last.price / first.price) - 1) * 100 : null,
       maxDrawdownPct, priceAtSecondsAfterLaunch: priceAt,
+      launchTransactionObservedSupplyValuation: observedSupply != null ? { first: first.price * observedSupply, last: last.price * observedSupply, high: high * observedSupply, quoteMint, notVerifiedAsFullMarketCap: true } : null,
       priceUnit: "quote asset " + quoteMint + " per whole token",
       caveat: "Trade-implied price from decoded event amounts; not an oracle USD price or guaranteed executable quote."
     };
