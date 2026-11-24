@@ -102,7 +102,7 @@ export function decodePumpSwapPoolState(data: Buffer): PumpSwapPoolState | null 
     coinCreator: readKey(data, 211),
     isMayhemMode: data[243] === 1,
     isCashbackCoin: data[244] === 1,
-    virtualQuoteReservesRaw: data.readBigInt128LE(245)
+    virtualQuoteReservesRaw: (data.readBigInt64LE(253) << 64n) + data.readBigUInt64LE(245)
   };
 }
 
