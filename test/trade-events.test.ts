@@ -41,7 +41,7 @@ test("decodes PumpSwap buy and sell events with user quote amounts", () => {
   const makeBuy = () => {
     chunks.length = 0;
     chunks.push(Buffer.from([103, 244, 82, 31, 44, 245, 119, 119]));
-    i64(1_800_000_000n); u64(20_000_000n); u64(5); u64(0); u64(0); u64(100); u64(200);
+    i64(1_800_000_000n); u64(20_000_000n); u64(5); u64(0); u64(0); u64(980_000_000n); u64(10_050_000_000n);
     u64(9_000_000_000n); u64(20); u64(2); u64(30); u64(3); u64(9_100_000_000n); u64(9_050_000_000n);
     for (let i = 1; i <= 7; i++) pubkey(i);
     u64(25); u64(4); u8(1); u64(1); u64(2); u64(3); i64(1_800_000_000n); u64(5); str("buy");
@@ -51,7 +51,7 @@ test("decodes PumpSwap buy and sell events with user quote amounts", () => {
   const makeSell = () => {
     chunks.length = 0;
     chunks.push(Buffer.from([62, 47, 55, 10, 165, 3, 220, 42]));
-    i64(1_800_000_001n); u64(10_000_000n); u64(5); u64(0); u64(0); u64(100); u64(200);
+    i64(1_800_000_001n); u64(10_000_000n); u64(5); u64(0); u64(0); u64(1_020_000_000n); u64(9_050_000_000n);
     u64(4_000_000_000n); u64(20); u64(2); u64(30); u64(3); u64(3_900_000_000n); u64(3_950_000_000n);
     for (let i = 1; i <= 7; i++) pubkey(i);
     u64(25); u64(4); u64(1); u64(1); u64(2); u64(2); i128(30n); u8(1); u64(1000); u64(0); u64(0); u64(0);
@@ -68,6 +68,8 @@ test("decodes PumpSwap buy and sell events with user quote amounts", () => {
   assert.equal(result[0].venue, "pumpswap");
   assert.equal(result[0].side, "buy");
   assert.equal(result[0].quoteAmountRaw, 9_050_000_000n);
+  assert.equal(result[0].preTradeBaseReserveRaw, 1_000_000_000n);
+  assert.equal(result[0].preTradeQuoteReserveRaw, 1_000_000_000n);
   assert.equal(result[1].side, "sell");
   assert.equal(result[1].quoteAmountRaw, 3_950_000_000n);
 });
