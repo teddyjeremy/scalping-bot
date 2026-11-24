@@ -50,7 +50,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - uses: actions/cache@v4
         with:
           path: historical-data
@@ -73,7 +72,7 @@ jobs:
               raise SystemExit("HISTORY_START must be earlier than HISTORY_END")
           PY
       - name: Install dependencies
-        run: npm ci
+        run: npm install
       - name: Install Hugging Face client
         run: python -m pip install --upgrade huggingface_hub
       - name: Restore previous archive and checkpoint from Hugging Face
@@ -92,7 +91,9 @@ jobs:
         run: npm run historical:archive
       - name: Upload resumable archive to Hugging Face dataset
         if: always()
-        run: python scripts/hf-dataset-sync.py upload
+        run: |
+          python -m pip install --upgrade huggingface_hub
+          python scripts/hf-dataset-sync.py upload
       - name: Preserve run output as artifact
         if: always()
         uses: actions/upload-artifact@v4
