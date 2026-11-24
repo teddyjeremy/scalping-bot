@@ -1,0 +1,42 @@
+name: Pump.fun live collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */5 * * *"
+
+concurrency:
+  group: pumpfun-live-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: read
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ndeda/solana-scalping-data
+      CAPTURE_MINUTES: "10"
+      RUN_FOR_MINUTES: "285"
+      DATA_DIR: ./data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          test -n "$HELIUS_API_KEY_1" || { echo "::error::Missing HELIUS_API_KEY_1 repository secret"; exit 1; }
+          test -n "$HF_TOKEN" || { echo "::error::Missing HF_TOKEN repository secret"; exit 1; }
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Collect live Pump.fun data
+        run: npm start
