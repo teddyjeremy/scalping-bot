@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; venueTradeFeesQuote?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -219,7 +219,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
@@ -493,6 +493,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         tradeFeesQuote: metrics.tradeFeesQuote, tradeFeesBase: metrics.tradeFeesBase,
         shareFeesQuote: metrics.shareFeesQuote, lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
         buybackFeesQuote: metrics.buybackFeesQuote,
+        venueTradeFeesQuote: metrics.venueTradeFeesQuote, inputTransferFeesQuote: metrics.inputTransferFeesQuote,
+        outputTransferFeesQuote: metrics.outputTransferFeesQuote,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
         curveRealSolReserves: metrics.curveRealSolReserves ?? null,
@@ -652,6 +654,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.lpFeeQuote != null) metrics.lpFeesQuote = (metrics.lpFeesQuote ?? 0) + trade.lpFeeQuote;
     if (trade.cashbackFeeQuote != null) metrics.cashbackFeesQuote = (metrics.cashbackFeesQuote ?? 0) + trade.cashbackFeeQuote;
     if (trade.buybackFeeQuote != null) metrics.buybackFeesQuote = (metrics.buybackFeesQuote ?? 0) + trade.buybackFeeQuote;
+    if (trade.venueTradeFeeQuote != null) metrics.venueTradeFeesQuote = (metrics.venueTradeFeesQuote ?? 0) + trade.venueTradeFeeQuote;
+    if (trade.inputTransferFeeQuote != null) metrics.inputTransferFeesQuote = (metrics.inputTransferFeesQuote ?? 0) + trade.inputTransferFeeQuote;
+    if (trade.outputTransferFeeQuote != null) metrics.outputTransferFeesQuote = (metrics.outputTransferFeesQuote ?? 0) + trade.outputTransferFeeQuote;
     const profile = metrics.walletProfiles[trade.wallet];
     await appendTokenEvent(item.mint, {
       schemaVersion: 7, kind: "wallet_activity", mint: item.mint, signature, slot, blockTime: tx.blockTime,
