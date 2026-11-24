@@ -2,9 +2,6 @@ name: Solana research readiness validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
