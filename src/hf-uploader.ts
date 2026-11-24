@@ -42,6 +42,30 @@ export async function restoreCollectorState(localPath: string) {
   }
 }
 
+export async function restoreQualityManifest(localPath: string) {
+  if (!token) return;
+  try {
+    const response = await fetch(`https://huggingface.co/datasets/${repoName}/resolve/main/quality/data-quality-manifest.json`, {
+      headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000)
+    });
+    if (response.status === 404) return;
+    if (!response.ok) throw new Error(`Quality manifest download returned HTTP ${response.status}`);
+    const body = await response.text();
+    const parsed = JSON.parse(body) as { schemaVersion?: number; quarantinedMints?: unknown };
+    if (parsed.schemaVersion !== 1 || !parsed.quarantinedMints || typeof parsed.quarantinedMints !== "object") {
+      throw new Error("Remote quality manifest has an invalid schema; local manifest retained.");
+    }
+    await mkdir(path.dirname(localPath), { recursive: true });
+    const tempPath = localPath + ".restore.tmp";
+    await writeFile(tempPath, body);
+    const { rename } = await import("node:fs/promises");
+    await rename(tempPath, localPath);
+    console.log("Restored validated data-quality manifest from Hugging Face.");
+  } catch (error) {
+    console.error("Could not restore remote quality manifest; local manifest will be used:", String(error).slice(0, 180));
+  }
+}
+
 export async function restoreTokenEvents(mints: string[]) {
   if (!token || mints.length === 0) return;
   await Promise.all(mints.map(async mint => {
