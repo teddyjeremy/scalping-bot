@@ -1,0 +1,31 @@
+name: Hugging Face dataset write preflight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/hf-dataset-sync.py"
+      - ".github/workflows/hf-write-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Hugging Face client
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Verify dataset read, write and cleanup permissions
+        run: |
+          python scripts/hf-dataset-sync.py restore
+          python scripts/hf-dataset-sync.py write-test
