@@ -1425,8 +1425,11 @@ async function backfillExistingTokenMetrics() {
         schemaVersion: 8, kind: "historical_metrics_backfill_summary", mint: item.mint,
         signaturesDiscovered: records.length, signaturesProcessedThisRun: processedThisRun,
         signaturesRemaining: pending.length, complete: metrics.historicalMetricsBackfillComplete,
+        coverageScope: "stored_event_signatures_plus_bounded_mint_address_fallback",
+        completeMeansAllDiscoveredStoredSignaturesReplayed: true,
+        novemberArchiveBackfillComplete: false,
         holderSnapshotsBackfilled: false,
-        note: "Trade, wallet, fee and reserve-derived metrics replayed chronologically from stored transaction signatures. Historical holder balances are not reconstructed from present-day accounts."
+        note: "Trade, wallet, fee and reserve-derived metrics replayed chronologically from stored transaction signatures and a bounded mint-address fallback. This is not a full historical program archive scan or a guarantee that every swap signature was discovered. Historical holder balances are not reconstructed from present-day accounts."
       });
       await persistState();
       console.log("Historical metric replay:", item.mint, "processed:", processedThisRun, "remaining:", pending.length, "complete:", metrics.historicalMetricsBackfillComplete);
