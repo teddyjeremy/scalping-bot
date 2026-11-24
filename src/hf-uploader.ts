@@ -23,9 +23,18 @@ export async function restoreCollectorState(localPath: string) {
       return;
     }
     if (!response.ok) throw new Error(`Checkpoint download returned HTTP ${response.status}`);
+    const checkpointText = await response.text();
+    if (!checkpointText.trim()) throw new Error("Remote checkpoint is empty; refusing to overwrite local progress.");
+    const parsed = JSON.parse(checkpointText) as { tokens?: unknown; seenLaunchSignatures?: unknown };
+    if (!parsed || typeof parsed !== "object" || !parsed.tokens || !Array.isArray(parsed.seenLaunchSignatures)) {
+      throw new Error("Remote checkpoint has an invalid schema; refusing to overwrite local progress.");
+    }
     await mkdir(path.dirname(localPath), { recursive: true });
-    await writeFile(localPath, Buffer.from(await response.arrayBuffer()));
-    console.log("Restored collector checkpoint from Hugging Face.");
+    const tempPath = localPath + ".restore.tmp";
+    await writeFile(tempPath, checkpointText);
+    const { rename } = await import("node:fs/promises");
+    await rename(tempPath, localPath);
+    console.log("Restored validated collector checkpoint from Hugging Face.");
   } catch (error) {
     console.error("Could not restore remote checkpoint; local state will be used:", String(error).slice(0, 220));
   }
@@ -65,6 +74,7 @@ export async function flushHuggingFaceUploads() {
   const includeState = stateDirty;
   for (const mint of batch) dirtyMints.delete(mint);
   if (includeState) stateDirty = false;
+  let batchFailed = false;
   flushPromise = (async () => {
     try {
       const files = await Promise.all(batch.map(async mint => {
@@ -83,6 +93,7 @@ export async function flushHuggingFaceUploads() {
       });
       console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""} to Hugging Face.`);
     } catch (error) {
+      batchFailed = true;
       for (const mint of batch) dirtyMints.add(mint);
       if (includeState) stateDirty = true;
       console.error("Hugging Face upload failed; batch retained for retry:", String(error).slice(0, 240));
@@ -90,6 +101,6 @@ export async function flushHuggingFaceUploads() {
   })();
   await flushPromise;
   flushPromise = null;
-  if (dirtyMints.size > 0 || stateDirty) await flushHuggingFaceUploads();
+  if (!batchFailed && (dirtyMints.size > 0 || stateDirty)) await flushHuggingFaceUploads();
 }
 setInterval(() => { void flushHuggingFaceUploads(); }, 30_000).unref();
