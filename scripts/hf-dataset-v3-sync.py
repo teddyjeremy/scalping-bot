@@ -143,29 +143,83 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
             summary = json.loads(local_summary.read_text(encoding="utf-8"))
 
     capture_complete = bool((summary or {}).get("capture", {}).get("complete"))
+    launch_file = ROOT / "launches" / venue / mint_parts(venue, mint)[0] / f"{mint}.json"
+    launch_record = json.loads(launch_file.read_text(encoding="utf-8")) if launch_file.is_file() else {}
+    window = launch_record.get("historicalWindow") or {}
+    def iso_epoch(value):
+        return datetime.fromtimestamp(int(value), timezone.utc).isoformat() if value is not None else None
+
+    trade_event_keys = set()
+    trade_signatures = set()
+    failed_signatures = set()
+    trade_count = 0
+    failed_count = 0
+    duplicate_count = 0
+    page_files = sorted((ROOT / "trades" / venue / mint_parts(venue, mint)[0] / mint).glob("*.jsonl"))
+    for page_file in page_files:
+        for line in page_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            signature = str(row.get("signature") or "")
+            if row.get("recordType") == "historical_failed_transaction":
+                failed_count += 1
+                if signature:
+                    failed_signatures.add(signature)
+            elif row.get("recordType") == "historical_trade_event":
+                trade_count += 1
+                if signature:
+                    trade_signatures.add(signature)
+                event_key = (signature, row.get("eventIndex", 0), row.get("user"), row.get("side"))
+                if event_key in trade_event_keys:
+                    duplicate_count += 1
+                trade_event_keys.add(event_key)
+
+    def stream(status, count, signatures, duplicates=0):
+        return {
+            "status": status,
+            "record_count": count,
+            "distinct_signature_count": len(signatures),
+            "duplicate_count": duplicates,
+            "cursor": None,
+            "pages": len(page_files),
+            "error": None,
+        }
+
+    trade_status = ("complete" if trade_count else "empty_verified") if capture_complete else "partial"
+    failed_status = ("complete" if failed_count else "empty_verified") if capture_complete else "partial"
     ledger.update({
         "schema_version": "3.0.0",
         "mint": mint,
         "launch_venue": venue,
+        "launch_signature": launch_record.get("signature") or (summary or {}).get("launchSignature"),
+        "launch_time_utc": iso_epoch(launch_record.get("blockTime") or (summary or {}).get("launchTime")),
+        "discovery_source": venue,
         "state": "COMPLETE" if capture_complete else "COLLECTING",
+        "attempt_count": int(ledger.get("attempt_count", 0)) + 1,
+        "requested_window": {
+            "start_utc": iso_epoch(window.get("start")),
+            "end_utc": iso_epoch(window.get("end")),
+        },
+        "actual_coverage": None,
+        "streams": {
+            "launch": stream("complete", 1 if launch_record else 0, {str(launch_record.get("signature"))} if launch_record.get("signature") else set()),
+            "trade_events": stream(trade_status, trade_count, trade_signatures, duplicate_count),
+            "failed_transactions": stream(failed_status, failed_count, failed_signatures),
+        },
         "validation": {
-            "level": "COMPLETE" if capture_complete else ("PARTIAL" if uploaded_trade_count or uploaded_failed_count else "METADATA_ONLY"),
+            "level": "COMPLETE" if capture_complete else ("PARTIAL" if page_files else "METADATA_ONLY"),
             "errors": [],
         },
+        "capture": (summary or {}).get("capture"),
         "dataset_paths": sorted(paths),
         "content_hashes": hashes,
-        "streams": {
-            "trade_events": {"status": "partial" if not capture_complete else "complete", "last_publish_trade_rows": uploaded_trade_count},
-            "failed_transactions": {"status": "partial" if not capture_complete else "complete", "last_publish_rows": uploaded_failed_count},
-        },
-        "capture": (summary or {}).get("capture"),
-        "launch_signature": (summary or {}).get("launchSignature"),
-        "launch_time_utc": datetime.fromtimestamp((summary or {}).get("launchTime", 0), timezone.utc).isoformat() if (summary or {}).get("launchTime") else None,
-        "last_verified_at": now(),
+        "last_error": None,
         "updated_at": now(),
+        "last_verified_at": now(),
         "completion_rule": "COMPLETE only after per-file remote readback SHA-256 verification and summary capture.complete=true",
     })
-    ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
+    ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\\n").encode()
     API.upload_file(
         path_or_fileobj=BytesIO(ledger_bytes), path_in_repo=ledger_path,
         repo_id=REPO_ID, repo_type="dataset",
