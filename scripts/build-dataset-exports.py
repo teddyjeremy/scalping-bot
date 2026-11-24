@@ -27,7 +27,7 @@ failed_rows = []
 raw_event_keys = {}
 failed_keys = set()
 
-for path in sorted((ROOT / "launches").glob("*/*.json")):
+for path in sorted((ROOT / "launches").rglob("*.json")):
     if path.name.endswith(".summary.json"):
         continue
     row = read_json(path)
@@ -43,7 +43,7 @@ for path in sorted((ROOT / "launches").glob("*/*.json")):
         "raw_json": json.dumps(row, separators=(",", ":"), ensure_ascii=False),
     })
 
-for path in sorted((ROOT / "launches").glob("*/*.summary.json")):
+for path in sorted((ROOT / "launches").rglob("*.summary.json")):
     row = read_json(path)
     events = row.get("tradeEvents") or {}
     quality = row.get("dataQuality") or {}
@@ -63,7 +63,7 @@ for path in sorted((ROOT / "launches").glob("*/*.summary.json")):
         "raw_json": json.dumps(row, separators=(",", ":"), ensure_ascii=False),
     })
 
-for path in sorted((ROOT / "trades").glob("*/*/*.jsonl")):
+for path in sorted((ROOT / "trades").rglob("*.jsonl")):
     with path.open("r", encoding="utf-8") as f:
         for line_number, line in enumerate(f, 1):
             if not line.strip():
