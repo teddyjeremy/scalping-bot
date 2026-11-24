@@ -377,7 +377,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       quoteMint: metrics.quoteMint ?? null,
       quoteSymbol: metrics.quoteSymbol ?? null, quoteDecimals: metrics.quoteDecimals ?? null,
       pricingMethod: isStonkFun ? "launchlab_pool_reserve_ratio_reference_only" : metrics.priceSource,
-      marketCapSol, marketCapUsd, marketCapQuote: marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
+      marketCapSol, marketCapUsd, marketCapQuote: isStonkFun ? null : marketCap(metrics.lastPriceQuote ?? null, supply), marketCapBasis: "total_supply_fdv", totalSupply: supply,
       priceChangePctFromFirstObservedPrice: isStonkFun ? null : priceChangePct,
       launchlabRealBase: isStonkFun ? metrics.launchlabRealBase ?? null : null,
       launchlabRealQuote: isStonkFun ? metrics.launchlabRealQuote ?? null : null,
