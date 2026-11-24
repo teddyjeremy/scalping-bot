@@ -77,7 +77,7 @@ export function evaluateLiquiditySafety(evidence: LiquidityEvidence | null): Gat
     };
   }
   if (evidence.kind === "burned_lp") {
-    const burned = evidence.poolOwnerVerified && evidence.lpMintVerified && evidence.poolLpSupplyRaw !== "0" && evidence.lpSupplyRaw === "0";
+    const burned = evidence.poolOwnerVerified && evidence.lpMintVerified && evidence.lpSupplyRaw === "0";
     return { eligible: burned, reasons: burned ? [] : ["lp_burn_not_verified_on_chain"], warnings: [] };
   }
   const valid = evidence.poolOwnerVerified && evidence.lpMintVerified &&
