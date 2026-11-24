@@ -175,15 +175,29 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   const progress = state.programs[program] ?? { complete: false };
   if (progress.complete) return;
-  let before = progress.before;
   let pages = 0;
   while (pages < MAX_PAGES) {
-    const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(program), { limit: PAGE_SIZE, ...(before ? { before } : {}) }, "confirmed"));
-    if (!signatures.length) { progress.complete = true; break; }
-    const eligible = signatures.filter(s => s.blockTime != null && s.blockTime >= START && s.blockTime < END).reverse();
-    const hydrated = await Promise.all(eligible.map(async entry => ({ entry, tx: await fetchTx(entry.signature) })));
+    const enhanced = await getHeliusHistoryPage(program, START, END, progress.paginationToken);
+    let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
+    if (enhanced) {
+      hydrated = await Promise.all(enhanced.data.map(async row => ({
+        entry: { signature: row.signature, slot: row.slot, blockTime: row.blockTime },
+        tx: asParsedTransaction(row) ?? await fetchTx(row.signature)
+      })));
+      progress.paginationToken = enhanced.paginationToken ?? undefined;
+      if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
+    } else {
+      const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(program), { limit: PAGE_SIZE, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
+      if (!signatures.length) { progress.complete = true; state.programs[program] = progress; await save(); break; }
+      const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
+      hydrated = await Promise.all(eligible.map(async entry => ({ entry, tx: await fetchTx(entry.signature) })));
+      progress.before = signatures[signatures.length - 1].signature;
+      const oldest = signatures[signatures.length - 1].blockTime;
+      if (oldest != null && oldest < START || signatures.length < PAGE_SIZE) progress.complete = true;
+    }
     for (const { entry, tx } of hydrated) {
-      if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
+      if (entry.blockTime == null) continue;
+      if (!tx || !tx.meta) throw new Error(\`Missing historical transaction metadata for \${entry.signature}; checkpoint remains on this page.\`);
       if (!tx.meta.err) {
         const top = instructions(tx);
         const launches = venue === "pumpfun"
@@ -191,22 +205,18 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
           : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
         for (const launch of launches) {
           if (state.launches[launch.mint]) continue;
-          const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime!, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool };
+          const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool };
           state.launches[launch.mint] = record;
           await writeLaunch(record, tx);
-          console.log(`Archived ${venue} launch ${launch.mint} at ${new Date(entry.blockTime! * 1000).toISOString()}`);
+          console.log(\`Archived \${venue} launch \${launch.mint} at \${new Date(entry.blockTime * 1000).toISOString()}\`);
         }
       }
     }
-    before = signatures[signatures.length - 1].signature;
-    progress.before = before;
     state.programs[program] = progress;
     await save();
     pages++;
-    const oldest = signatures[signatures.length - 1].blockTime;
-    if (oldest != null && oldest < START) { progress.complete = true; await save(); break; }
-    if (signatures.length < PAGE_SIZE) { progress.complete = true; await save(); break; }
-    console.log(`Historical ${venue}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}`);
+    console.log(\`Historical \${venue}: page \${pages}/\${MAX_PAGES}, launches archived=\${Object.keys(state.launches).length}, enhancedHistory=\${enhancedHistorySupport === true}\`);
+    if (progress.complete) break;
   }
   state.programs[program] = progress;
   await save();
