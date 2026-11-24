@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -295,7 +296,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
 
 async function persistState() {
   await mkdir(DATA_DIR, { recursive: true });
-  const tempPath = statePath + ".tmp";
+  // Concurrent websocket callbacks may persist simultaneously; unique temp files prevent rename races.
+  const tempPath = statePath + "." + randomUUID() + ".tmp";
   await writeFile(tempPath, JSON.stringify(state, null, 2));
   await rename(tempPath, statePath);
   markCollectorStateDirty();
@@ -335,7 +337,7 @@ async function fetchTransaction(signature: string): Promise<ParsedTransactionWit
   let lastError: unknown;
   for (let attempt = 0; attempt < Math.max(rpc.length, 3); attempt++) {
     try {
-      const tx = await nextRpc().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      const tx = await nextRpc().getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as never });
       if (tx) return tx;
     } catch (error) {
       lastError = error;
