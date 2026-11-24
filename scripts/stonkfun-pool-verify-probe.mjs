@@ -150,7 +150,7 @@ for (const sample of samples) {
       if (!row.signature) continue;
       const tx = await rpc("getTransaction", [
         row.signature,
-        { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+        { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }
       ]);
       checkedSignatures++;
       if (!tx?.meta || !tx?.transaction) continue;
