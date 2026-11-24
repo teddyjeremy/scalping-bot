@@ -53,6 +53,8 @@ for path in sorted((ROOT / "launches").glob("*/*.summary.json")):
         "uniqueBuyers": events.get("uniqueBuyers", 0),
         "uniqueSellers": events.get("uniqueSellers", 0),
         "sourcePageCount": row.get("sourcePageCount", 0),
+        "captureComplete": (row.get("capture") or {}).get("complete", False),
+        "capturedSourcePages": (row.get("capture") or {}).get("totalSourcePages", 0),
         "historicalUsdPrice": quality.get("historicalUsdPrice", False),
         "historicalFdv": quality.get("historicalFdv", False),
         "historicalHolderSnapshots": quality.get("historicalHolderSnapshots", False),
@@ -117,6 +119,7 @@ write("launch_summaries.parquet", summary_rows, pa.schema([
     pa.field("tradeEventCount", pa.int64()), pa.field("buyCount", pa.int64()),
     pa.field("sellCount", pa.int64()), pa.field("uniqueBuyers", pa.int64()),
     pa.field("uniqueSellers", pa.int64()), pa.field("sourcePageCount", pa.int64()),
+    pa.field("captureComplete", pa.bool_()), pa.field("capturedSourcePages", pa.int64()),
     pa.field("historicalUsdPrice", pa.bool_()), pa.field("historicalFdv", pa.bool_()),
     pa.field("historicalHolderSnapshots", pa.bool_()), pa.field("raw_json", pa.string()),
 ]))
@@ -141,11 +144,14 @@ write("failed_transactions.parquet", failed_rows, pa.schema([
     pa.field("sourceAddress", pa.string()), pa.field("transactionFeeLamports", pa.int64()),
     pa.field("computeUnitsConsumed", pa.int64()), pa.field("raw_json", pa.string()),
 ]))
-(OUT / "README.txt").write_text(
-    "Queryable exports generated from the raw historical archive. "
-    "Raw JSON/JSONL records remain under historical/. "
-    "Amounts ending in Raw are integer base units; price is quote asset per whole token. "
-    "A summary row may describe a partial capture; consult raw_json and the checkpoint for completeness. "
-    "No historical USD price, FDV, or holder snapshot is inferred when unavailable.\\n",
+(OUT / "README.md").write_text(
+    "---\\nlicense: mit\\npretty_name: Solana Launch and Trade Research Archive\\n---\\n"
+    "# Solana launch and trade research archive\\n\\n"
+    "Queryable Parquet exports generated from the raw Pump.fun and StonkFun / Raydium LaunchLab archive. Raw JSON/JSONL records remain under `historical/`.\\n\\n"
+    "- `launches.parquet`: launch metadata and transaction costs.\\n"
+    "- `launch_summaries.parquet`: per-token event counts and capture-completeness flags.\\n"
+    "- `trade_events.parquet`: decoded buys/sells, quote amounts, fees and quote-denominated prices.\\n"
+    "- `failed_transactions.parquet`: failed transaction observations and network fees.\\n\\n"
+    "A summary row is provisional until `captureComplete` is true. Amounts ending in `Raw` are integer base units. Implied prices are quote-asset-denominated, not USD. Missing historical USD prices, FDV and holder snapshots are not fabricated. Bot/sniper/bundle labels are heuristics, not proof.\\n",
     encoding="utf-8",
 )
