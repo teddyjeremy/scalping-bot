@@ -120,6 +120,7 @@ type TokenMetrics = {
   largestBuySol: number;
   largestSellSol: number; largestBuyQuote: number; largestSellQuote: number;
   priceSource?: string;
+  estimatedCurveFeeBps?: number | null;
   curveRealSolReserves?: number | null;
   curveRealTokenReserves?: number | null;
   curveVirtualSolReserves?: number | null;
@@ -334,6 +335,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     metrics.highPriceUsd = priceUsd; metrics.lowPriceUsd = priceUsd; metrics.highPriceQuote = priceQuote; metrics.lowPriceQuote = priceQuote; metrics.maxDrawdownPct = null;
   }
   metrics.priceSource = "pump_bonding_curve_virtual_reserves";
+  metrics.estimatedCurveFeeBps = curve.isHolderReward ? null : 95 + (isSol || isUsdc ? 30 : curve.creatorFeeBps != null && curve.creatorFeeBps > 0n ? Number(curve.creatorFeeBps) : 30);
   metrics.lastPriceSol = priceSol; metrics.lastPriceUsd = priceUsd; metrics.lastPriceQuote = priceQuote;
   metrics.lastPriceObservedAt = Date.now();
   metrics.curveRealSolReserves = isSol ? realQuote : null;
@@ -1888,11 +1890,11 @@ async function runPaperStrategy(item: TokenState) {
       const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
       return Math.sqrt(returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / returns.length);
     })(),
-    venueFeePctPerSide: item.venue === "pumpfun" ? 1.25 : null
+    venueFeePctPerSide: item.venue === "pumpfun" && metrics.curveComplete === false && metrics.estimatedCurveFeeBps != null ? metrics.estimatedCurveFeeBps / 100 : null
   }, item.paperPosition);
   metrics.lastRealQuoteReserveUsd = reserveUsd;
   if (decision.position) item.paperPosition = decision.position;
-  if (decision.action === "enter" || decision.action === "exit" || decision.action === "reject") {
+  if (decision.action === "enter" || decision.action === "exit" || decision.action === "reject" || (decision.action === "hold" && decision.dangerSignals.length > 0)) {
     item.paperLastDecisionAt = now;
     await appendTokenEvent(item.mint, {
       schemaVersion: 1, kind: "paper_strategy_decision", strategyVersion: "baseline-v1",
@@ -1900,7 +1902,9 @@ async function runPaperStrategy(item: TokenState) {
       reasons: decision.reasons, dangerSignals: decision.dangerSignals,
       launchAgeSeconds: (now - item.firstSeenAt) / 1000, fdvUsd, priceUsd,
       quoteLiquidityUsd, priceImpactPctForOneDollar, reserveDropPct,
-      paperPosition: item.paperPosition ?? null, liveTransactionSubmitted: false, observedAt: now
+      paperPosition: item.paperPosition ?? null, feeEstimatePctPerSide: item.venue === "pumpfun" ? metrics.estimatedCurveFeeBps == null ? null : metrics.estimatedCurveFeeBps / 100 : null,
+      paperPnlCoverage: "venue fee estimate only; excludes network/priority fees, ATA rent, slippage, transfer fees and failed-transaction costs",
+      liveTransactionSubmitted: false, observedAt: now
     });
   }
 }
