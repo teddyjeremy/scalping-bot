@@ -24,7 +24,7 @@ Current derived fields include:
 - USD conversion is provided for SOL using the SOL/USD reference and for USDC/USDT using an explicitly approximate $1 reference. Unknown custom quote assets are not falsely priced in USD.
 - FDV-style market capitalization in quote units and USD where conversion is supported (bonding-curve spot price multiplied by on-chain total supply; this is not circulating market cap).
 - Timed snapshots at 5, 10, 15, 30, 60, 120, 300 and 600 seconds after launch.
-- Low-confidence owner-balance-delta buy/sell observations, quote/SOL/USD estimated volume, largest observed buy/sell amounts and unique observed buyers/sellers. These are not exact transaction-level trade counts or fills.
+- Low-confidence owner-balance-delta buy/sell observations, quote/SOL/USD estimated volume, largest observed buy/sell amounts and unique observed buyers/sellers. These are not exact transaction-level trade counts or fills. Quote volume remains in native quote units; SOL/USD volume is recorded as null when a valid conversion is unavailable, not as a misleading zero.
 - Highest/lowest observed USD price where available, quote-denominated maximum drawdown, largest observed buy/sell size, and time to 1.2x, 1.5x, 1.7x and 2x from the first observed quote price.
 - Bonding-curve virtual and real SOL/token reserves, completion status, quote mint, and creator field when present in the curve account.
 - Raw transaction balances, token balances, logs, signatures, slot, network fee in lamports, signature count, estimated base-signature fee, estimated priority fee (network fee minus base signature fee), compute units consumed, loaded addresses and inner instructions remain available for re-analysis.
