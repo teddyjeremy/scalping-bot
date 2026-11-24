@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[];
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -219,7 +219,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
-  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.shareFeesQuote ??= null;
+  metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
