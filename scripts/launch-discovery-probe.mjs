@@ -55,6 +55,25 @@ function summarize(result) {
 
 const results = [];
 for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.name, probe.url)));
+const pumpDateProbes = [
+  {
+    name: "pumpfun_coins_iso_date_window",
+    url: "https://frontend-api-v3.pump.fun/coins?offset=0&limit=100&sort=created_timestamp&order=ASC&includeNsfw=false&fromDate=2026-11-01T00%3A00%3A00Z&toDate=2026-11-24T00%3A00%3A00Z"
+  },
+  {
+    name: "pumpfun_coins_epoch_date_window",
+    url: "https://frontend-api-v3.pump.fun/coins?offset=0&limit=100&sort=created_timestamp&order=ASC&includeNsfw=false&fromDate=1793491200&toDate=1795478400"
+  },
+  {
+    name: "pumpfun_protected_iso_date_window",
+    url: "https://frontend-api-v3.pump.fun/coins/protected?limit=100&offset=0&sort=created_timestamp&searchTerm=&order=ASC&includeNsfw=false&creator=&complete=false&isLive=false&fromDate=2026-11-01T00%3A00%3A00Z&toDate=2026-11-24T00%3A00%3A00Z&banned=false"
+  },
+  {
+    name: "pumpfun_protected_epoch_date_window",
+    url: "https://frontend-api-v3.pump.fun/coins/protected?limit=100&offset=0&sort=created_timestamp&searchTerm=&order=ASC&includeNsfw=false&creator=&complete=false&isLive=false&fromDate=1793491200&toDate=1795478400&banned=false"
+  }
+];
+for (const probe of pumpDateProbes) results.push(summarize(await requestJson(probe.name, probe.url)));
 
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
 const targetStartMs = Date.parse("2026-11-01T00:00:00Z");
