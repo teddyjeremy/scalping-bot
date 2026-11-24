@@ -173,7 +173,7 @@ The historical backfill is a separate research pipeline. It is not an AI trading
 
 - Default window: November 1–23, 2026 UTC (end date is exclusive: November 24).
 - Venues: Pump.fun and StonkFun / Raydium LaunchLab.
-- Uses Helius `getTransactionsForAddress` with ascending time filters and pagination when available; otherwise falls back to standard Solana RPC signature and transaction calls.
+- Uses Helius `getTransactionsForAddress` with ascending time filters and pagination when available; otherwise falls back to standard Solana RPC signature and transaction calls. Pump.fun launch discovery queries the protocol mint-authority PDA used by `create` / `create_v2`, rather than scanning every Pump trade transaction.
 - Uses three paced Helius connections with per-key queues, rate-limit cooldowns and failover.
 - Archives launch transactions, the first ten minutes of available mint/curve/pool transactions, decoded trades, fee fields, funding links and transaction failures.
 - Discovers PumpSwap and LaunchLab-to-CPMM migrated pools from observed instructions and persists those addresses in resumable checkpoints.
