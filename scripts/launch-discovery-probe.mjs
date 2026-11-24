@@ -38,9 +38,10 @@ function summarize(result) {
     createdAt: item.created_timestamp ?? item.createAt ?? item.createdAt ?? item.created_at ?? item.createTime ?? null,
     creator: item.creator ?? item.creatorAddress ?? null,
     pool: item.pool ?? item.poolId ?? item.id ?? null,
-    platformInfo: item.platformInfo ?? null,
-    configInfo: item.configInfo ?? null,
-    mintB: item.mintB ?? null,
+    platformId: item.platformInfo?.pubKey ?? null,
+    platformName: item.platformInfo?.name ?? null,
+    quoteMint: item.mintB?.address ?? item.mintB ?? null,
+    curveConfig: item.configInfo?.pubKey ?? null,
     migrateType: item.migrateType ?? null
   } : null;
   const data = result.body?.data ?? result.body;
@@ -56,41 +57,72 @@ const results = [];
 for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.name, probe.url)));
 
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
-const raydiumBaseParams = "sort=new&size=100&mintType=default&includeNsfw=false";
-for (const [label, platformId] of [
-  ["stonkfun_reward_config_filter", "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt"],
-  ["stonkfun_standard_config_filter", "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"]
-]) {
-  const response = await requestJson(label, `${raydiumBase}?platformId=${platformId}&${raydiumBaseParams}`);
-  results.push(summarize(response));
-}
-
-const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
 const targetStartMs = Date.parse("2026-11-01T00:00:00Z");
-let nextPageId = null;
-let raydiumReachedTargetStart = false;
-let raydiumPageCount = 0;
-for (let page = 1; page <= 60; page++) {
-  const url = `${raydiumBase}?${raydiumParams}${nextPageId ? `&nextPageId=${encodeURIComponent(nextPageId)}` : ""}`;
-  const response = await requestJson(`raydium_launchlab_new_page_${page}`, url);
-  const summary = summarize(response);
-  results.push(summary);
-  const data = response.body?.data ?? {};
-  const next = data?.nextPageId ?? null;
-  raydiumPageCount++;
-  const oldestOnPage = summary.last?.createdAt;
-  if (Number.isFinite(oldestOnPage) && oldestOnPage <= targetStartMs) {
-    raydiumReachedTargetStart = true;
-    break;
+const platformIds = [
+  "6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt",
+  "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"
+];
+const platformCoverage = [];
+for (const platformId of platformIds) {
+  let nextPageId = null;
+  let reachedBoundary = false;
+  let pages = 0;
+  let rowCount = 0;
+  let previousOldest = Number.POSITIVE_INFINITY;
+  let monotonic = true;
+  let platformMismatches = 0;
+  const seenMints = new Set();
+  let duplicateMints = 0;
+  let earliest = null;
+  let latest = null;
+
+  for (let page = 1; page <= 60; page++) {
+    const params = `platformId=${platformId}&sort=new&size=100&mintType=default&includeNsfw=false`;
+    const url = `${raydiumBase}?${params}${nextPageId ? `&nextPageId=${encodeURIComponent(nextPageId)}` : ""}`;
+    const response = await requestJson(`raydium_stonkfun_${platformId.slice(0, 6)}_page_${page}`, url);
+    const rows = rowsFrom(response.body);
+    const summary = summarize(response);
+    results.push(summary);
+    pages++;
+    rowCount += rows.length;
+    if (!response.ok || response.body?.success !== true || !Array.isArray(response.body?.data?.rows)) break;
+
+    for (const row of rows) {
+      if (row.platformInfo?.pubKey !== platformId) platformMismatches++;
+      if (typeof row.mint === "string") {
+        if (seenMints.has(row.mint)) duplicateMints++;
+        seenMints.add(row.mint);
+      }
+    }
+    const pageOldest = Number(rows.at(-1)?.createAt);
+    const pageNewest = Number(rows[0]?.createAt);
+    if (Number.isFinite(pageOldest)) {
+      earliest = earliest === null ? pageOldest : Math.min(earliest, pageOldest);
+      latest = latest === null ? pageNewest : Math.max(latest, pageNewest);
+      if (pageOldest > previousOldest) monotonic = false;
+      previousOldest = pageOldest;
+      if (pageOldest <= targetStartMs) reachedBoundary = true;
+    }
+
+    const data = response.body.data;
+    const next = data.nextPageId ?? null;
+    if (reachedBoundary || !rows.length || !next || next === nextPageId) break;
+    nextPageId = next;
   }
-  if (!response.ok || response.body?.success !== true || !summary.rowCount || !next || next === nextPageId) break;
-  nextPageId = next;
+
+  platformCoverage.push({
+    platformId, pages, rows: rowCount, uniqueMints: seenMints.size, duplicateMints,
+    platformMismatches, monotonicCreatedAtDescending: monotonic,
+    earliestCreateAt: earliest, latestCreateAt: latest,
+    reachedNovember1Boundary: reachedBoundary
+  });
 }
 
 const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
-const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_new_page_") && r.ok && r.rowCount > 0);
-const raydiumDates = raydiumPages.flatMap(r => [r.first?.createdAt, r.last?.createdAt]).filter(Number.isFinite);
-const platformFilterResults = results.filter(r => r.name.startsWith("stonkfun_"));
+const platformCoverageComplete = platformCoverage.length === 2 && platformCoverage.every(p =>
+  p.rows > 0 && p.uniqueMints === p.rows && p.duplicateMints === 0 &&
+  p.platformMismatches === 0 && p.monotonicCreatedAtDescending && p.reachedNovember1Boundary
+);
 
 const report = {
   generatedAt: new Date().toISOString(),
@@ -99,17 +131,12 @@ const report = {
   datasetWritten: false,
   pumpOffsetsTested: pumpOffsets,
   pumpSortOrdersTested: ["ASC", "DESC"],
-  raydiumPagesTested: raydiumPageCount,
-  raydiumEarliestObservedCreateAt: raydiumDates.length ? Math.min(...raydiumDates) : null,
-  raydiumLatestObservedCreateAt: raydiumDates.length ? Math.max(...raydiumDates) : null,
-  raydiumReachedNovember1Boundary: raydiumReachedTargetStart,
-  stonkfunPlatformFilterRows: Object.fromEntries(platformFilterResults.map(r => [r.name, r.rowCount])),
+  stonkfunPlatformCoverage: platformCoverage,
   checks: {
     pumpfunIndexReturnsRows: pumpHasRows,
-    raydiumLaunchLabIndexReturnsRows: raydiumPages.length > 0,
-    raydiumCursorObserved: raydiumPages.some(r => r.nextPageId)
+    stonkfunFilteredIndexesReachNovember1WithUniqueMonotonicMints: platformCoverageComplete
   },
-  status: pumpHasRows && raydiumPages.length ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified",
+  status: pumpHasRows && platformCoverageComplete ? "discovery_indexes_passed_boundary_and_dedup_checks" : "discovery_indexes_not_fully_verified",
   results
 };
 
@@ -117,4 +144,4 @@ console.log("LAUNCH_DISCOVERY_BOUNDARY_REPORT");
 console.log(JSON.stringify(report, null, 2));
 await mkdir("launch-discovery-probe-output", { recursive: true });
 await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\n");
-if (!pumpHasRows || !raydiumPages.length) process.exitCode = 2;
+if (!pumpHasRows || !platformCoverageComplete) process.exitCode = 2;
