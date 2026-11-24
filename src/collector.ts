@@ -1631,6 +1631,121 @@ async function fetchMintRiskMetadata(mint: string): Promise<{
     return { mintAuthority: null, freezeAuthority: null, mintInitialized: null, mintMetadataParsed: false, tokenProgramOwner: null, tokenExtensions: null };
   }
 }
+const screeningInProgress = new Set<string>();
+function quoteUsdValue(quoteMint: string): Promise<number | null> | number | null {
+  if (quoteMint === USDC_MINT || quoteMint === USDT_MINT) return 1;
+  if (quoteMint === WRAPPED_SOL_MINT) return getSolUsd();
+  return null;
+}
+async function calculateCandidateFdv(item: TokenState): Promise<{ fdvUsd: number | null; liquidity: LiquidityEvidence | null; quoteMint: string | null; priceQuote: number | null; quoteUsd: number | null }> {
+  const supply = item.supplyUi, decimals = item.supplyDecimals;
+  if (supply == null || supply <= 0 || decimals == null) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+  if (item.venue === "pumpfun") {
+    const [curveAddress] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(item.mint).toBuffer()], PUMP_PROGRAM);
+    const info = await nextRpc().getAccountInfo(curveAddress, "confirmed");
+    if (!info || !info.owner.equals(PUMP_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: null, priceQuote: null, quoteUsd: null };
+    const curve = decodePumpCurve(info.data);
+    if (!curve) return { fdvUsd: null, liquidity: null, quoteMint: null, priceQuote: null, quoteUsd: null };
+    const quoteMint = curve.quoteMint ?? WRAPPED_SOL_MINT;
+    const quoteDecimals = await getMintDecimals(quoteMint);
+    const quoteUsd = await quoteUsdValue(quoteMint);
+    if (quoteDecimals == null || quoteUsd == null) return { fdvUsd: null, liquidity: null, quoteMint, priceQuote: null, quoteUsd };
+    const virtualBase = Number(curve.virtualTokenRaw) / (10 ** decimals);
+    const virtualQuote = Number(curve.virtualSolLamports) / (10 ** quoteDecimals);
+    const realBase = Number(curve.realTokenRaw) / (10 ** decimals);
+    const realQuote = Number(curve.realSolLamports) / (10 ** quoteDecimals);
+    const priceQuote = virtualBase > 0 ? virtualQuote / virtualBase : null;
+    const fdvUsd = priceQuote != null ? priceQuote * supply * quoteUsd : null;
+    const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: !curve.complete, realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
+    return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
+  }
+  if (item.venue === "stonkfun" && item.poolAddress) {
+    const info = await nextRpc().getAccountInfo(new PublicKey(item.poolAddress), "confirmed");
+    if (!info || !info.owner.equals(LAUNCHLAB_PROGRAM)) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+    const pool = decodeLaunchLabPoolState(info.data);
+    if (!pool || pool.baseMint !== item.mint || pool.quoteMint !== item.quoteMint || pool.platformConfig !== item.platformConfig) return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+    const quoteMint = pool.quoteMint, quoteUsd = await quoteUsdValue(quoteMint);
+    const virtualBase = Number(pool.virtualBaseRaw) / (10 ** pool.baseDecimals);
+    const virtualQuote = Number(pool.virtualQuoteRaw) / (10 ** pool.quoteDecimals);
+    const realBase = Number(pool.realBaseRaw) / (10 ** pool.baseDecimals);
+    const realQuote = Number(pool.realQuoteRaw) / (10 ** pool.quoteDecimals);
+    const priceQuote = virtualBase > 0 ? virtualQuote / virtualBase : null;
+    const fdvUsd = priceQuote != null && quoteUsd != null ? priceQuote * supply * quoteUsd : null;
+    const liquidity: LiquidityEvidence = { kind: "bonding_curve", programOwnerVerified: true, curvePdaVerified: true, active: pool.statusName === "funding", realQuoteReserve: realQuote, virtualQuoteReserve: virtualQuote, realTokenReserve: realBase, virtualTokenReserve: virtualBase };
+    return { fdvUsd, liquidity, quoteMint, priceQuote, quoteUsd };
+  }
+  return { fdvUsd: null, liquidity: null, quoteMint: item.quoteMint ?? null, priceQuote: null, quoteUsd: null };
+}
+async function stopDiscoveryWatch(mint: string) {
+  const sub = discoverySubscriptions.get(mint);
+  if (!sub) return;
+  if (sub.timer) clearInterval(sub.timer);
+  try { if (sub.id >= 0) await sub.connection.removeAccountChangeListener(sub.id); } catch {}
+  discoverySubscriptions.delete(mint);
+}
+async function screenDiscoveryCandidate(item: TokenState) {
+  if (screeningInProgress.has(item.mint) || item.discoveryStatus === "eligible" || item.discoveryStatus === "rejected" || item.discoveryStatus === "expired") return;
+  screeningInProgress.add(item.mint);
+  try {
+    const ageSeconds = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+    if (ageSeconds > 300) {
+      item.discoveryStatus = "expired"; item.discoveryReasons = ["discovery_window_expired_after_5_minutes"];
+      await appendTokenEvent(item.mint, { schemaVersion: 1, kind: "discovery_screen", mint: item.mint, eligible: false, reasons: item.discoveryReasons, launchAgeSeconds: ageSeconds, fdvUsd: item.fdvUsdAtScreen ?? null, observedAt: Date.now() });
+      await persistState(); await stopDiscoveryWatch(item.mint); return;
+    }
+    const mintSafety = await fetchMintRiskMetadata(item.mint);
+    Object.assign(item, mintSafety);
+    const valuation = await calculateCandidateFdv(item);
+    item.fdvUsdAtScreen = valuation.fdvUsd;
+    if (valuation.quoteMint) {
+      item.quoteMint = valuation.quoteMint;
+      const metrics = ensureMetrics(item);
+      metrics.quoteMint = valuation.quoteMint;
+      metrics.quoteDecimals = await getMintDecimals(valuation.quoteMint) ?? metrics.quoteDecimals ?? null;
+      metrics.quoteSymbol = valuation.quoteMint === WRAPPED_SOL_MINT ? "SOL" : valuation.quoteMint === USDC_MINT ? "USDC" : valuation.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL";
+    }
+    const result = evaluateDiscoveryCandidate({ launchAgeSeconds: ageSeconds, fdvUsd: valuation.fdvUsd, mint: mintSafety, liquidity: valuation.liquidity, minFdvUsd: 5_000, maxFdvUsd: 10_000, maxLaunchAgeSeconds: 300 });
+    const reasonsChanged = JSON.stringify(result.reasons) !== JSON.stringify(item.discoveryReasons ?? []);
+    item.discoveryReasons = result.reasons; item.discoveryLastCheckedAt = Date.now();
+    if (reasonsChanged || result.eligible) await appendTokenEvent(item.mint, {
+      schemaVersion: 1, kind: "discovery_screen", mint: item.mint, venue: item.venue, eligible: result.eligible,
+      reasons: result.reasons, warnings: result.warnings, launchAgeSeconds: ageSeconds, fdvUsd: valuation.fdvUsd,
+      fdvRangeUsd: [5_000, 10_000], priceQuote: valuation.priceQuote, quoteMint: valuation.quoteMint, quoteUsd: valuation.quoteUsd,
+      liquidityEvidence: valuation.liquidity, mintAuthority: mintSafety.mintAuthority, freezeAuthority: mintSafety.freezeAuthority,
+      tokenProgramOwner: mintSafety.tokenProgramOwner, tokenExtensions: mintSafety.tokenExtensions, observedAt: Date.now()
+    });
+    if (!result.eligible) {
+      const definitive = result.reasons.some(reason =>
+        (reason === "mint_authority_not_revoked_or_unknown" && mintSafety.mintMetadataParsed && mintSafety.mintAuthority !== null) ||
+        (reason === "freeze_authority_not_revoked_or_unknown" && mintSafety.mintMetadataParsed && mintSafety.freezeAuthority !== null) ||
+        reason.startsWith("unsupported_token_2022_extension") || reason === "nonzero_transfer_fee_extension" || reason === "default_account_state_frozen");
+      if (definitive) { item.discoveryStatus = "rejected"; await stopDiscoveryWatch(item.mint); }
+      await persistState(); return;
+    }
+    item.discoveryStatus = "eligible"; item.detailedCaptureStarted = true; item.liquidityEvidenceKind = valuation.liquidity?.kind ?? null;
+    await persistState(); await stopDiscoveryWatch(item.mint);
+    console.log("Discovery gates passed; starting detailed ten-minute capture:", item.mint, "FDV USD:", valuation.fdvUsd);
+    await captureMint(item); await loadActivitySignatures(item); await backfillActiveMintActivity(item);
+  } catch (error) { console.warn("Candidate screening will retry:", item.mint, String(error).slice(0, 180)); }
+  finally { screeningInProgress.delete(item.mint); }
+}
+async function watchDiscoveryCandidate(item: TokenState) {
+  if (discoverySubscriptions.has(item.mint) || item.discoveryStatus === "eligible" || item.discoveryStatus === "rejected" || item.discoveryStatus === "expired") return;
+  const connection = nextRpc();
+  try {
+    let address: PublicKey;
+    if (item.venue === "stonkfun" && item.poolAddress) address = new PublicKey(item.poolAddress);
+    else [address] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(item.mint).toBuffer()], PUMP_PROGRAM);
+    const id = await connection.onAccountChange(address, () => { void screenDiscoveryCandidate(item); }, "confirmed");
+    const timer = setInterval(() => { void screenDiscoveryCandidate(item); }, 3_000);
+    discoverySubscriptions.set(item.mint, { connection, id, timer });
+    await screenDiscoveryCandidate(item);
+  } catch (error) {
+    console.warn("Lightweight discovery watch failed; retrying:", item.mint, String(error).slice(0, 160));
+    const timer = setTimeout(() => { discoverySubscriptions.delete(item.mint); void watchDiscoveryCandidate(item); }, 5_000);
+    discoverySubscriptions.set(item.mint, { connection, id: -1, timer: timer as unknown as NodeJS.Timeout });
+  }
+}
 async function processLaunch(signature: string, slot: number, logs: string[], tx: ParsedTransactionWithMeta) {
   if (state.seenLaunchSignatures.includes(signature) || tx.meta?.err || !isCreateTransaction(tx)) return;
   const mints = createdPumpMints(tx);
@@ -1650,7 +1765,7 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
     const mintRisk = await fetchMintRiskMetadata(mint);
     const item: TokenState = {
       mint, ...mintRisk, creator: null, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: createInstruction.kind, venue: "pumpfun", firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS,
-      supplyUi, supplyDecimals
+      supplyUi, supplyDecimals, discoveryStatus: "pending", detailedCaptureStarted: false
     };
     ensureMetrics(item);
     state.tokens[mint] = item;
@@ -1665,9 +1780,8 @@ async function processLaunch(signature: string, slot: number, logs: string[], tx
       program: PUMP_PROGRAM.toBase58(), instruction: createInstruction.kind, launchVerification: "IDL discriminator + mint account owner", launchLogs: logs
     });
     await persistState();
-    await processTradeMetrics(item, tx, signature, slot, false);
-    await captureMint(item);
-    console.log("Verified Pump mint capture started:", mint, "fee payer:", feePayer);
+    await watchDiscoveryCandidate(item);
+    console.log("Verified Pump launch entered lightweight discovery screening:", mint, "fee payer:", feePayer);
   }
   state.seenLaunchSignatures.push(signature);
   if (state.seenLaunchSignatures.length > 20_000) state.seenLaunchSignatures = state.seenLaunchSignatures.slice(-10_000);
@@ -1694,7 +1808,8 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
     const item: TokenState = {
       mint, ...mintRisk, creator, launchSignature: signature, launchFeePayer: feePayer, launchSlot: slot, launchVerified: true, launchInstruction: kind,
       venue: "stonkfun", quoteMint, poolAddress: pool, platformConfig,
-      firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS, supplyUi, supplyDecimals
+      firstSeenAt, expiresAt: firstSeenAt + CAPTURE_MS, supplyUi, supplyDecimals,
+      discoveryStatus: "pending", detailedCaptureStarted: false
     };
     const metrics = ensureMetrics(item);
     metrics.quoteMint = quoteMint;
@@ -1716,9 +1831,8 @@ async function processStonkLaunch(signature: string, slot: number, logs: string[
       launchLogs: logs
     });
     await persistState();
-    await processTradeMetrics(item, tx, signature, slot, false);
-    await captureMint(item);
-    console.log("Verified StonkFun LaunchLab capture started:", mint, "quote:", quoteMint);
+    await watchDiscoveryCandidate(item);
+    console.log("Verified StonkFun launch entered lightweight discovery screening:", mint, "quote:", quoteMint);
   }
   state.seenLaunchSignatures.push(signature);
   if (state.seenLaunchSignatures.length > 20_000) state.seenLaunchSignatures = state.seenLaunchSignatures.slice(-10_000);
