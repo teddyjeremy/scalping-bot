@@ -161,16 +161,30 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
   const bots = wallets.filter(p => p.botScore >= 50);
   const bundled = wallets.filter(p => p.bundleCandidate);
   const fundingGroups = new Map<string, string[]>();
-  for (const profile of wallets) for (const source of profile.fundingSources) {
-    const group = fundingGroups.get(source) ?? [];
-    group.push(profile.wallet);
-    fundingGroups.set(source, group);
+  const sameSlotGroups = new Map<number, string[]>();
+  for (const profile of wallets) {
+    for (const source of profile.fundingSources) {
+      const group = fundingGroups.get(source) ?? [];
+      group.push(profile.wallet);
+      fundingGroups.set(source, group);
+    }
+    if (profile.firstBuySlot != null) {
+      const group = sameSlotGroups.get(profile.firstBuySlot) ?? [];
+      group.push(profile.wallet);
+      sameSlotGroups.set(profile.firstBuySlot, group);
+    }
   }
+  const topBuyers = [...wallets].sort((a, b) => b.quoteSpent - a.quoteSpent).slice(0, 20);
+  const topSellers = [...wallets].sort((a, b) => b.quoteReceived - a.quoteReceived).slice(0, 20);
+  const developerCandidates = wallets.filter(p => p.creator || p.launchFeePayer);
+  const earlyBuyers = wallets.filter(p => p.firstBuyElapsedSeconds != null && p.firstBuyElapsedSeconds <= 30);
   return {
     walletCount: wallets.length,
     creatorWallets: creators.map(p => p.wallet),
     launchFeePayerWallets: devFeePayers.map(p => p.wallet),
+    developerCandidateWallets: developerCandidates.map(p => ({ wallet: p.wallet, role: p.creator ? "creator" : "launch_fee_payer" })),
     sniperCandidateWallets: snipers.map(p => p.wallet),
+    earlyBuyerWallets: earlyBuyers.map(p => p.wallet),
     botCandidateWallets: bots.map(p => p.wallet),
     bundledEntryCandidateWallets: bundled.map(p => p.wallet),
     creatorBuyQuote: creators.reduce((n, p) => n + p.quoteSpent, 0),
@@ -180,10 +194,15 @@ export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) 
     launchFeePayerSellQuote: devFeePayers.reduce((n, p) => n + p.quoteReceived, 0),
     sniperBuyQuote: snipers.reduce((n, p) => n + p.quoteSpent, 0),
     botCandidateBuyQuote: bots.reduce((n, p) => n + p.quoteSpent, 0),
+    topBuyerWallets: topBuyers.map(p => ({ wallet: p.wallet, quoteSpent: p.quoteSpent, tokenBought: p.tokenBought, transactionCount: p.transactionCount, sniperCandidate: p.sniperCandidate, botScore: p.botScore })),
+    topSellerWallets: topSellers.map(p => ({ wallet: p.wallet, quoteReceived: p.quoteReceived, tokenSold: p.tokenSold, transactionCount: p.transactionCount, creator: p.creator, botScore: p.botScore })),
+    sameSlotEntryGroups: [...sameSlotGroups.entries()].filter(([, members]) => members.length > 1)
+      .map(([slot, members]) => ({ slot, wallets: [...new Set(members)] })),
     sharedFundingGroups: [...fundingGroups.entries()].filter(([, members]) => members.length > 1)
       .map(([fundingSource, members]) => ({ fundingSource, wallets: [...new Set(members)] })),
     botLabelsAreHeuristic: true,
     sniperLabelsAreHeuristic: true,
+    bundleLabelsAreHeuristic: true,
     fundingLinksAreObservedTransfersOnly: true
   };
 }
