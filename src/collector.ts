@@ -180,7 +180,7 @@ async function reconcileMissedLaunches() {
     while (pages < MAX_RECONCILE_PAGES && !shuttingDown) {
       const options: { limit: number; before?: string; until?: string } = { limit: RECONCILE_PAGE_SIZE };
       if (state.reconcileBefore) options.before = state.reconcileBefore;
-      else options.until = state.lastProgramSignature;
+      options.until = state.lastProgramSignature;
       const signatures = await connection.getSignaturesForAddress(PUMP_PROGRAM, options, "confirmed");
       if (signatures.length === 0) { reachedCheckpoint = true; break; }
       const page = signatures.filter(s => s.signature !== state.lastProgramSignature);
