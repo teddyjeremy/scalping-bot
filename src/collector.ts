@@ -114,7 +114,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[];
-  networkFeesLamports?: number; protocolFeesQuote?: number; creatorFeesQuote?: number; lpFeesQuote?: number; cashbackFeesQuote?: number; buybackFeesQuote?: number;
+  networkFeesLamports?: number | null; protocolFeesQuote?: number | null; creatorFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -219,8 +219,8 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.walletProfiles ??= {};
   metrics.holderSnapshotsRecorded ??= [];
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= [];
-  metrics.networkFeesLamports ??= 0; metrics.protocolFeesQuote ??= 0; metrics.creatorFeesQuote ??= 0;
-  metrics.lpFeesQuote ??= 0; metrics.cashbackFeesQuote ??= 0; metrics.buybackFeesQuote ??= 0;
+  metrics.networkFeesLamports ??= null; metrics.protocolFeesQuote ??= null; metrics.creatorFeesQuote ??= null;
+  metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
@@ -473,6 +473,11 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
         uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
         walletCohorts: metrics.walletCohorts ?? summarizeWalletCohorts(metrics.walletProfiles),
+        networkFeesLamports: metrics.networkFeesLamports,
+        protocolFeesQuote: metrics.protocolFeesQuote, creatorFeesQuote: metrics.creatorFeesQuote,
+        lpFeesQuote: metrics.lpFeesQuote, cashbackFeesQuote: metrics.cashbackFeesQuote,
+        buybackFeesQuote: metrics.buybackFeesQuote,
+        exactTradeCount: metrics.exactTradeCount ?? 0, estimatedTradeCount: metrics.estimatedTradeCount ?? 0,
         priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
         curveComplete: metrics.curveComplete ?? null,
         curveRealSolReserves: metrics.curveRealSolReserves ?? null,
