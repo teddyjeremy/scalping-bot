@@ -31,7 +31,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ndeda/solana-scalping-data
       CAPTURE_MINUTES: "10"
-      RUN_FOR_MINUTES: "285"
+      RUN_FOR_MINUTES: "295"
       HELIUS_TX_MIN_INTERVAL_MS: "350"
       DATA_DIR: ./data
     steps:
