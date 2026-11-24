@@ -56,7 +56,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
 }
 type TradeSourceCursor = { before?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 async function save() {
@@ -130,11 +130,11 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       if (!tx.meta?.err) {
         const top = instructions(tx);
         const launches = venue === "pumpfun"
-          ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
-          : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, quoteMint: x.quoteMint, pool: x.pool }));
+          ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
+          : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
         for (const launch of launches) {
           if (state.launches[launch.mint]) continue;
-          const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime!, creator: launch.creator, quoteMint: launch.quoteMint, pool: launch.pool };
+          const record = { venue, mint: launch.mint, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime!, creator: launch.creator, feePayer: launch.feePayer, quoteMint: launch.quoteMint, pool: launch.pool };
           state.launches[launch.mint] = record;
           await writeLaunch(record, tx);
           console.log(`Archived ${venue} launch ${launch.mint} at ${new Date(entry.blockTime! * 1000).toISOString()}`);
