@@ -1,0 +1,189 @@
+export type WalletTradeObservation = {
+  wallet: string;
+  side: "buy" | "sell";
+  tokenAmount: number;
+  quoteAmount: number;
+};
+
+export type WalletProfile = {
+  wallet: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  transactionCount: number;
+  buyCount: number;
+  sellCount: number;
+  tokenBought: number;
+  tokenSold: number;
+  observedNetTokenChange: number;
+  quoteSpent: number;
+  quoteReceived: number;
+  firstBuyAt: number | null;
+  firstBuyElapsedSeconds: number | null;
+  firstBuySlot: number | null;
+  lastBuyAt: number | null;
+  lastSellAt: number | null;
+  sameSlotAsLaunch: boolean;
+  launchFeePayer: boolean;
+  creator: boolean;
+  fundingSources: string[];
+  recentTransactionTimes: number[];
+  recentTransactionSlots: number[];
+  botScore: number;
+  botSignals: string[];
+  sniperCandidate: boolean;
+  bundleCandidate: boolean;
+};
+
+export type WalletAnalyticsContext = {
+  observedAt: number;
+  slot: number;
+  launchSlot: number;
+  launchAt: number;
+  launchFeePayer: string | null;
+  creator: string | null;
+  fundingSources?: string[];
+};
+
+export function updateWalletProfile(
+  existing: WalletProfile | undefined,
+  trade: WalletTradeObservation,
+  context: WalletAnalyticsContext
+): WalletProfile {
+  const profile: WalletProfile = existing ?? {
+    wallet: trade.wallet,
+    firstSeenAt: context.observedAt,
+    lastSeenAt: context.observedAt,
+    transactionCount: 0,
+    buyCount: 0,
+    sellCount: 0,
+    tokenBought: 0,
+    tokenSold: 0,
+    observedNetTokenChange: 0,
+    quoteSpent: 0,
+    quoteReceived: 0,
+    firstBuyAt: null,
+    firstBuyElapsedSeconds: null,
+    firstBuySlot: null,
+    lastBuyAt: null,
+    lastSellAt: null,
+    sameSlotAsLaunch: false,
+    launchFeePayer: false,
+    creator: false,
+    fundingSources: [],
+    recentTransactionTimes: [],
+    recentTransactionSlots: [],
+    botScore: 0,
+    botSignals: [],
+    sniperCandidate: false,
+    bundleCandidate: false
+  };
+
+  // One observation per wallet per signature should be supplied by the caller.
+  profile.transactionCount++;
+  profile.lastSeenAt = context.observedAt;
+  profile.recentTransactionTimes.push(context.observedAt);
+  profile.recentTransactionSlots.push(context.slot);
+  profile.recentTransactionTimes = profile.recentTransactionTimes.filter(t => context.observedAt - t <= 30_000).slice(-30);
+  profile.recentTransactionSlots = profile.recentTransactionSlots.slice(-30);
+  profile.launchFeePayer ||= context.launchFeePayer === trade.wallet;
+  profile.creator ||= context.creator === trade.wallet;
+  for (const source of context.fundingSources ?? []) {
+    if (source !== trade.wallet && !profile.fundingSources.includes(source)) profile.fundingSources.push(source);
+  }
+
+  if (trade.side === "buy") {
+    profile.buyCount++;
+    profile.tokenBought += trade.tokenAmount;
+    profile.quoteSpent += trade.quoteAmount;
+    profile.lastBuyAt = context.observedAt;
+    if (profile.firstBuyAt == null) {
+      profile.firstBuyAt = context.observedAt;
+      profile.firstBuyElapsedSeconds = Math.max(0, (context.observedAt - context.launchAt) / 1000);
+      profile.firstBuySlot = context.slot;
+    }
+  } else {
+    profile.sellCount++;
+    profile.tokenSold += trade.tokenAmount;
+    profile.quoteReceived += trade.quoteAmount;
+    profile.lastSellAt = context.observedAt;
+  }
+  profile.observedNetTokenChange = profile.tokenBought - profile.tokenSold;
+  profile.sameSlotAsLaunch ||= context.slot === context.launchSlot;
+  profile.sniperCandidate ||= trade.side === "buy" && profile.firstBuyElapsedSeconds != null && profile.firstBuyElapsedSeconds <= 5;
+  profile.bundleCandidate ||= trade.side === "buy" && context.slot <= context.launchSlot + 1 && context.slot >= context.launchSlot;
+
+  const signals = new Set(profile.botSignals);
+  const rapidTransactions = profile.recentTransactionTimes.length;
+  const sameSlotTransactions = new Set(profile.recentTransactionSlots).size < profile.recentTransactionSlots.length;
+  const roundTrip = profile.buyCount > 0 && profile.sellCount > 0 &&
+    profile.lastSellAt != null && profile.firstBuyAt != null &&
+    profile.lastSellAt - profile.firstBuyAt <= 30_000;
+  if (rapidTransactions >= 4) signals.add("four_or_more_transactions_in_30_seconds");
+  if (sameSlotTransactions) signals.add("multiple_transactions_in_same_slot");
+  if (roundTrip) signals.add("buy_and_sell_within_30_seconds");
+  profile.botSignals = [...signals];
+  profile.botScore = Math.min(100,
+    (rapidTransactions >= 4 ? 35 : rapidTransactions >= 3 ? 15 : 0) +
+    (sameSlotTransactions ? 30 : 0) +
+    (roundTrip ? 35 : 0)
+  );
+  return profile;
+}
+
+export function extractFundingSources(tx: unknown, recipient: string): string[] {
+  const transaction = tx as {
+    transaction?: { message?: { instructions?: unknown[] } };
+    meta?: { innerInstructions?: Array<{ instructions?: unknown[] }> };
+  };
+  const instructions = [
+    ...(transaction.transaction?.message?.instructions ?? []),
+    ...(transaction.meta?.innerInstructions ?? []).flatMap(group => group.instructions ?? [])
+  ];
+  const sources = new Set<string>();
+  for (const value of instructions) {
+    if (!value || typeof value !== "object") continue;
+    const instruction = value as { program?: unknown; programId?: unknown; parsed?: { type?: unknown; info?: Record<string, unknown> } };
+    if (instruction.program !== "system" && String(instruction.programId ?? "") !== "11111111111111111111111111111111") continue;
+    if (instruction.parsed?.type !== "transfer") continue;
+    const info = instruction.parsed.info;
+    if (!info || String(info.destination ?? "") !== recipient) continue;
+    const source = String(info.source ?? "");
+    if (source && source !== recipient) sources.add(source);
+  }
+  return [...sources];
+}
+
+export function summarizeWalletCohorts(profiles: Record<string, WalletProfile>) {
+  const wallets = Object.values(profiles);
+  const creators = wallets.filter(p => p.creator);
+  const devFeePayers = wallets.filter(p => p.launchFeePayer);
+  const snipers = wallets.filter(p => p.sniperCandidate);
+  const bots = wallets.filter(p => p.botScore >= 50);
+  const bundled = wallets.filter(p => p.bundleCandidate);
+  const fundingGroups = new Map<string, string[]>();
+  for (const profile of wallets) for (const source of profile.fundingSources) {
+    const group = fundingGroups.get(source) ?? [];
+    group.push(profile.wallet);
+    fundingGroups.set(source, group);
+  }
+  return {
+    walletCount: wallets.length,
+    creatorWallets: creators.map(p => p.wallet),
+    launchFeePayerWallets: devFeePayers.map(p => p.wallet),
+    sniperCandidateWallets: snipers.map(p => p.wallet),
+    botCandidateWallets: bots.map(p => p.wallet),
+    bundledEntryCandidateWallets: bundled.map(p => p.wallet),
+    creatorBuyQuote: creators.reduce((n, p) => n + p.quoteSpent, 0),
+    creatorSellQuote: creators.reduce((n, p) => n + p.quoteReceived, 0),
+    creatorObservedNetTokenChange: creators.reduce((n, p) => n + p.observedNetTokenChange, 0),
+    launchFeePayerBuyQuote: devFeePayers.reduce((n, p) => n + p.quoteSpent, 0),
+    launchFeePayerSellQuote: devFeePayers.reduce((n, p) => n + p.quoteReceived, 0),
+    sniperBuyQuote: snipers.reduce((n, p) => n + p.quoteSpent, 0),
+    botCandidateBuyQuote: bots.reduce((n, p) => n + p.quoteSpent, 0),
+    sharedFundingGroups: [...fundingGroups.entries()].filter(([, members]) => members.length > 1)
+      .map(([fundingSource, members]) => ({ fundingSource, wallets: [...new Set(members)] })),
+    botLabelsAreHeuristic: true,
+    sniperLabelsAreHeuristic: true,
+    fundingLinksAreObservedTransfersOnly: true
+  };
+}
