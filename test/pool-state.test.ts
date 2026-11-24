@@ -112,7 +112,7 @@ test("finds LaunchLab migration to CPMM from the migration instruction accounts"
   const data = encode(Uint8Array.from([136, 92, 200, 103, 28, 218, 144, 140]));
   const result = findLaunchLabCpmmMigration([{
     programId: "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj",
-    data, accounts: ["payer", "mint", "quote", "platform", "cpmm-program", "pool"]
+    data, accounts: ["payer", "mint", "quote", "platform", "cpmm-program", "pool", "authority", "lp-mint", "base-vault", "quote-vault", "config", "fee", "observation", "lock-program", "lock-authority", "lock-lp-vault"]
   }], "mint");
-  assert.deepEqual(result, { pool: "pool", quoteMint: "quote" });
+  assert.deepEqual(result, { pool: "pool", quoteMint: "quote", lockLpVault: "lock-lp-vault" });
 });
