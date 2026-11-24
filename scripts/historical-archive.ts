@@ -38,6 +38,7 @@ async function rpc<T>(method: string, run: (connection: Connection) => Promise<T
     rpcCursor = (index + 1) % connections.length;
     const previous = rpcTails.get(index) ?? Promise.resolve();
     const request = previous.then(async () => {
+      if ((cooldown.get(index) ?? 0) > Date.now()) throw new Error("RPC key is cooling down");
       const wait = Math.max(0, 100 - (Date.now() - (lastStarted.get(index) ?? 0)));
       if (wait) await new Promise(resolve => setTimeout(resolve, wait));
       lastStarted.set(index, Date.now());
