@@ -9,7 +9,7 @@ export type MintSafetyInput = {
 };
 export type LiquidityEvidence =
   | { kind: "bonding_curve"; programOwnerVerified: boolean; curvePdaVerified: boolean; active: boolean; realQuoteReserve: number; virtualQuoteReserve: number; realTokenReserve: number; virtualTokenReserve: number }
-  | { kind: "locked_lp"; poolOwnerVerified: boolean; lpMintVerified: boolean; lockVaultTokenAccountVerified: boolean; lockAuthorityVerified: boolean; lockedLpAmount: number; lpSupply: number };
+  | { kind: "locked_lp"; poolOwnerVerified: boolean; lpMintVerified: boolean; lockVaultTokenAccountVerified: boolean; lockAuthorityVerified: boolean; lockedLpAmount: number; lpSupply: number; minimumLockedSharePct?: number };
 export type DiscoveryCandidateInput = {
   launchAgeSeconds: number;
   fdvUsd: number | null;
@@ -78,10 +78,10 @@ export function evaluateLiquiditySafety(evidence: LiquidityEvidence | null): Gat
   const valid = evidence.poolOwnerVerified && evidence.lpMintVerified &&
     evidence.lockVaultTokenAccountVerified && evidence.lockAuthorityVerified &&
     evidence.lockedLpAmount > 0 && evidence.lpSupply > 0 &&
-    evidence.lockedLpAmount <= evidence.lpSupply;
+    evidence.lockedLpAmount <= evidence.lpSupply && evidence.lockedLpAmount / evidence.lpSupply * 100 >= (evidence.minimumLockedSharePct ?? 90);
   return {
     eligible: valid,
-    reasons: valid ? [] : ["locked_lp_or_lock_authority_not_cryptographically_verified"],
+    reasons: valid ? [] : [evidence.lockedLpAmount > 0 && evidence.lpSupply > 0 && evidence.lockedLpAmount / evidence.lpSupply * 100 < (evidence.minimumLockedSharePct ?? 90) ? "locked_lp_share_below_90_percent" : "locked_lp_or_lock_authority_not_cryptographically_verified"],
     warnings: []
   };
 }
