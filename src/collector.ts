@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Connection, PublicKey, type Logs, type ParsedTransactionWithMeta } from "@solana/web3.js";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { markMintDirty } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const DATA_DIR = process.env.DATA_DIR ?? "./data";
@@ -37,6 +38,7 @@ async function appendTokenEvent(mint: string, event: Record<string, unknown>) {
   const dir = path.join(DATA_DIR, "tokens", mint);
   await mkdir(dir, { recursive: true });
   await appendFile(path.join(dir, "events.jsonl"), JSON.stringify(event) + "\n");
+  markMintDirty(mint);
 }
 function getAccountKey(key: unknown): string {
   if (typeof key === "string") return key;
