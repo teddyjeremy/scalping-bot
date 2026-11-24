@@ -27,6 +27,8 @@ export type TradeObservation = {
   confidence: "low" | "high";
   eventName?: string;
   protocolFeeQuote?: number | null;
+  platformFeeQuote?: number | null;
+  shareFeeQuote?: number | null;
   lpFeeQuote?: number | null;
   creatorFeeQuote?: number | null;
   cashbackFeeQuote?: number | null;
