@@ -1296,8 +1296,10 @@ async function loadHistoricalSignatureRecords(item: TokenState): Promise<Histori
           : event.kind === "launch_detected" && typeof event.launchSignature === "string" ? event.launchSignature : null;
         if (!signature) continue;
         const slot = typeof event.slot === "number" ? event.slot : item.launchSlot ?? 0;
-        const observedAt = typeof event.observedAt === "number" ? event.observedAt
-          : typeof event.blockTime === "number" ? event.blockTime * 1000 : item.firstSeenAt;
+        const transaction = event.transaction && typeof event.transaction === "object" ? event.transaction as Record<string, unknown> : null;
+        const observedAt = typeof event.blockTime === "number" ? event.blockTime * 1000
+          : typeof transaction?.blockTime === "number" ? transaction.blockTime * 1000
+          : typeof event.observedAt === "number" ? event.observedAt : item.firstSeenAt;
         const prior = records.get(signature);
         if (!prior || observedAt < prior.observedAt) records.set(signature, { signature, slot, observedAt });
       } catch { /* Keep valid records even if one JSONL line is malformed. */ }
