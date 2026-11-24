@@ -42,6 +42,10 @@ The collector does not yet calculate PumpSwap pool reserves/LP depth after gradu
 5. A mint subscription is not a complete universal trade feed for every venue. Add PumpSwap/Raydium/Orca pool subscriptions and pool-specific decoders as the next step.
 6. The collector records raw evidence. It does not yet label snipers/insiders or assert wallet relationships. Those require transaction-graph analysis and cautious heuristics.
 
+## Supported launchpads and data quality
+
+StonkFun currently uses Raydium LaunchLab. The collector recognizes LaunchLab `initialize`, `initialize_v2` and `initialize_with_token_2022`, verifies the LaunchLab program ID and the configured StonkFun platform-config address, then reads base mint (account 6), quote mint (account 7) and pool state (account 5). StonkFun swap prices are currently owner-balance-delta estimates marked low confidence; LaunchLab pool account bytes are retained so the exact account layout can be decoded and validated later. Arbitrary quote tokens remain denominated in their quote asset; USD is left null unless a trusted quote conversion exists.
+
 ## Data quality and historical quarantine
 
 The collector validates Pump launches using the exact top-level instruction discriminators from the official Pump IDL (`create` and `create_v2`), then checks that the first instruction account is owned by SPL Token or Token-2022. A generic log word such as `Create` is not launch evidence: associated-token-account creation can appear in unrelated buy transactions.
@@ -50,7 +54,7 @@ The Hugging Face dataset includes `quality/data-quality-manifest.json`. Consumer
 
 Transaction fetches are serialized and rate-limited across configured Helius keys, with exponential backoff on HTTP 429 and signature-level deduplication. This protects the provider quota; if incoming activity exceeds the configured request budget, delayed transaction enrichment is possible and should be monitored.
 
-Run `npm test` to check the strict instruction decoder and its false-positive cases.
+Run `npm test` to check the strict Pump and StonkFun launch decoders and their false-positive cases. The CI workflow publishes its preflight result to `quality/ci-status.json` in the Hugging Face dataset.
 
 ## Setup
 
