@@ -7,7 +7,7 @@ const repoName = process.env.HF_DATASET_REPO ?? "ndeda/solana-scalping-data";
 const dataDir = process.env.DATA_DIR ?? "./data";
 const dirtyMints = new Set<string>();
 let stateDirty = false;
-let flushing = false;
+let flushPromise: Promise<void> | null = null;
 let warnedMissingToken = false;
 
 export function markMintDirty(mint: string) { dirtyMints.add(mint); }
@@ -55,32 +55,41 @@ export async function flushHuggingFaceUploads() {
     if (!warnedMissingToken) { console.warn("HF_TOKEN is not set; dataset uploads are disabled."); warnedMissingToken = true; }
     return;
   }
-  if (flushing || (dirtyMints.size === 0 && !stateDirty)) return;
-  flushing = true;
+  if (flushPromise) {
+    await flushPromise;
+    if (dirtyMints.size > 0 || stateDirty) await flushHuggingFaceUploads();
+    return;
+  }
+  if (dirtyMints.size === 0 && !stateDirty) return;
   const batch = [...dirtyMints];
   const includeState = stateDirty;
   for (const mint of batch) dirtyMints.delete(mint);
   if (includeState) stateDirty = false;
-  try {
-    const files = await Promise.all(batch.map(async mint => {
-      const content = await readFile(path.join(dataDir, "tokens", mint, "events.jsonl"));
-      return { path: `raw/pumpfun/${mint}/events.jsonl`, content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" }) };
-    }));
-    if (includeState) {
-      const state = await readFile(path.join(dataDir, "collector-state.json"));
-      files.push({ path: "state/collector-state.json", content: new Blob([state.toString("utf8")], { type: "application/json" }) });
+  flushPromise = (async () => {
+    try {
+      const files = await Promise.all(batch.map(async mint => {
+        const content = await readFile(path.join(dataDir, "tokens", mint, "events.jsonl"));
+        return { path: `raw/pumpfun/${mint}/events.jsonl`, content: new Blob([content.toString("utf8")], { type: "application/x-ndjson" }) };
+      }));
+      if (includeState) {
+        const state = await readFile(path.join(dataDir, "collector-state.json"));
+        files.push({ path: "state/collector-state.json", content: new Blob([state.toString("utf8")], { type: "application/json" }) });
+      }
+      if (files.length === 0) return;
+      await uploadFiles({
+        repo: { type: "dataset", name: repoName }, accessToken: token, files,
+        commitTitle: `Update collector data (${batch.length} token files${includeState ? " + checkpoint" : ""})`,
+        commitDescription: "Automated resumable research data batch."
+      });
+      console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""} to Hugging Face.`);
+    } catch (error) {
+      for (const mint of batch) dirtyMints.add(mint);
+      if (includeState) stateDirty = true;
+      console.error("Hugging Face upload failed; batch retained for retry:", String(error).slice(0, 240));
     }
-    if (files.length === 0) return;
-    await uploadFiles({
-      repo: { type: "dataset", name: repoName }, accessToken: token, files,
-      commitTitle: `Update collector data (${batch.length} token files${includeState ? " + checkpoint" : ""})`,
-      commitDescription: "Automated resumable research data batch."
-    });
-    console.log(`Uploaded ${batch.length} token event file(s)${includeState ? " and collector checkpoint" : ""} to Hugging Face.`);
-  } catch (error) {
-    for (const mint of batch) dirtyMints.add(mint);
-    if (includeState) stateDirty = true;
-    console.error("Hugging Face upload failed; batch retained for retry:", String(error).slice(0, 240));
-  } finally { flushing = false; }
+  })();
+  await flushPromise;
+  flushPromise = null;
+  if (dirtyMints.size > 0 || stateDirty) await flushHuggingFaceUploads();
 }
 setInterval(() => { void flushHuggingFaceUploads(); }, 30_000).unref();
