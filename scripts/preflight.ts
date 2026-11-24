@@ -30,6 +30,23 @@ const programResults = await Promise.all(programs.map(async ([name, address]) =>
   return { name, executable: info.executable, owner: info.owner.toBase58() };
 }));
 
+const enhancedHistoryResponse = await fetch(`https://mainnet.helius-rpc.com/?api-key=${keys[0]}`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    jsonrpc: "2.0", id: "preflight-history", method: "getTransactionsForAddress",
+    params: ["6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", {
+      transactionDetails: "signatures", sortOrder: "desc", limit: 1, commitment: "confirmed",
+      filters: { blockTime: { gte: Math.floor(Date.now() / 1000) - 86_400 }, status: "any" }
+    }]
+  }),
+  signal: AbortSignal.timeout(20_000)
+});
+const enhancedHistoryBody = await enhancedHistoryResponse.json() as { result?: { data?: unknown[] }; error?: { code?: number; message?: string } };
+const enhancedHistory = enhancedHistoryResponse.ok && !enhancedHistoryBody.error && Array.isArray(enhancedHistoryBody.result?.data)
+  ? { available: true, sampleCount: enhancedHistoryBody.result.data.length }
+  : { available: false, reason: enhancedHistoryBody.error?.message ?? `HTTP ${enhancedHistoryResponse.status}`, fallback: "standard Solana RPC history" };
+
 const response = await fetch(`https://huggingface.co/api/datasets/${dataset}`, {
   headers: { Authorization: `Bearer ${hfToken}` },
   signal: AbortSignal.timeout(20_000)
@@ -40,7 +57,7 @@ console.log(JSON.stringify({
   status: "preflight_passed",
   collectionStarted: false,
   heliusConnections: rpcResults.map(({ keyIndex, health, slot }) => ({ keyIndex, health, slot })),
-  programAccounts: programResults,
+  programAccounts: programResults,\n  enhancedHistoricalRpc: enhancedHistory,
   huggingFace: { dataset: datasetInfo.id ?? dataset, readable: true, writePermissionTested: false },
-  note: "All three RPC keys were tested concurrently. This validates connectivity, not independent quota allocation or write permissions."
+  note: "All three RPC keys were tested concurrently. Enhanced historical RPC is optional; the archive falls back to standard RPC if unavailable. This validates connectivity, not independent quota allocation or write permissions."
 }, null, 2));
