@@ -63,7 +63,8 @@ try:
             "venue": venue, "mint": mint, "launchSignature": signature,
             "launchTime": launch_time,
             "capture": {
-                "complete": True, "windowSeconds": 600, "totalSourcePages": 1,
+                "complete": False, "transactionHistoryComplete": True, "researchReady": False,
+                "windowSeconds": 600, "totalSourcePages": 1,
                 "sources": {"smoke-source": {"complete": True, "pages": 1}},
             },
         }
@@ -102,7 +103,7 @@ try:
         ])
 
         ledger = module.load_remote_json(ledger_remote)
-        assert ledger and ledger["state"] == "COMPLETE", "coin ledger did not reach COMPLETE"
+        assert ledger and ledger["state"] == "PARTIAL", "coin ledger must remain PARTIAL when required historical metrics are unavailable"
         required = {"schema_version", "mint", "launch_venue", "launch_time_utc", "state",
                     "attempt_count", "requested_window", "streams", "validation", "updated_at"}
         assert required.issubset(ledger), "ledger is missing required schema fields"
@@ -117,8 +118,8 @@ try:
         assert (restored / "launches" / venue / shard / f"{mint}.summary.json").is_file()
         assert (restored / "trades" / venue / shard / mint / page_name).is_file()
         restored_checkpoint = json.loads((restored / "checkpoint.json").read_text(encoding="utf-8"))
-        assert restored_checkpoint["tradeCursors"][mint]["complete"] is True, "COMPLETE ledger was not reconciled into resume cursor"
-        print("PASS: per-coin upload, remote hashes, schema fields, restart restore, and COMPLETE-coin skip cursor verified.")
+        assert restored_checkpoint["tradeCursors"][mint]["complete"] is True, "PARTIAL ledger with completed transaction pagination was not reconciled into resume cursor"
+        print("PASS: per-coin upload, remote hashes, schema fields, restart restore, and PARTIAL-but-pagination-complete skip cursor verified.")
 finally:
     delete_remote()
     print("Temporary smoke-test coin and ledger cleaned from the dataset.")
