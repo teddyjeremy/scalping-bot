@@ -1,9 +1,11 @@
 import { PublicKey } from "@solana/web3.js";
 import { decodeBase58 } from "./pump-instructions.js";
+import { decodeRaydiumCpmmTradeEvent } from "./raydium-cpmm-trade.js";
 
 const PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const PUMP_AMM_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const LAUNCHLAB_PROGRAM = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
+const RAYDIUM_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 const PUMP_TRADE = Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]);
 const PUMP_AMM_BUY = Buffer.from([103, 244, 82, 31, 44, 245, 119, 119]);
 const PUMP_AMM_SELL = Buffer.from([62, 47, 55, 10, 165, 3, 220, 42]);
@@ -31,8 +33,8 @@ class Reader {
 }
 
 export type DecodedProgramTrade = {
-  venue: "pumpfun" | "pumpswap" | "stonkfun";
-  eventName: "TradeEvent" | "BuyEvent" | "SellEvent";
+  venue: "pumpfun" | "pumpswap" | "stonkfun" | "raydium_cpmm";
+  eventName: "TradeEvent" | "BuyEvent" | "SellEvent" | "SwapEvent";
   mint: string;
   user: string;
   side: "buy" | "sell";
@@ -56,6 +58,11 @@ export type DecodedProgramTrade = {
   feeRecipient: string | null;
   virtualQuoteReservesRaw: bigint | null;
   realQuoteReservesRaw: bigint | null;
+  tradeFeeRaw?: bigint;
+  tradeFeeMint?: string;
+  creatorFeeMint?: string;
+  inputTransferFeeRaw?: bigint;
+  outputTransferFeeRaw?: bigint;
 };
 
 type LaunchLabSwap = { user: string; pool: string; quoteMint: string; side: "buy" | "sell" };
@@ -187,6 +194,9 @@ export function decodeProgramTradeEvents(
       else if (program === PUMP_AMM_PROGRAM && discriminator.equals(PUMP_AMM_BUY)) event = decodePumpAmm(bytes, "buy");
       else if (program === PUMP_AMM_PROGRAM && discriminator.equals(PUMP_AMM_SELL)) event = decodePumpAmm(bytes, "sell");
       else if (program === LAUNCHLAB_PROGRAM && discriminator.equals(LAUNCHLAB_TRADE)) event = decodeLaunchLab(bytes, targetMint, instructions);
+      else if (program === RAYDIUM_CPMM_PROGRAM && discriminator.equals(Buffer.from([64, 198, 205, 232, 38, 8, 113, 226]))) {
+        event = decodeRaydiumCpmmTradeEvent(bytes, targetMint, instructions, data => new Reader(data));
+      }
       if (!event) continue;
       if (event.venue === "pumpswap") event.mint = targetMint;
       if (event.mint === targetMint && event.tokenAmountRaw > 0n && event.quoteAmountRaw > 0n) decoded.push(event);
