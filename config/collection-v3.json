@@ -1,6 +1,6 @@
 {
   "schema_version": "3.0.0",
-  "status": "design_only",
+  "status": "implementation_in_progress",
   "collection_window": {
     "start_utc": "2026-11-01T00:00:00Z",
     "end_utc_exclusive": "2026-11-24T00:00:00Z"
@@ -39,6 +39,9 @@
     "transaction_signing": false,
     "require_transaction_signatures": true,
     "store_raw_provider_payloads": true,
+    "persist_full_parsed_transaction_observations": true,
+    "record_ten_second_coverage_buckets": true,
+    "research_readiness_requires_verified_historical_usd_fdv_supply_holders_and_liquidity_state": true,
     "all_timestamps_utc": true,
     "missing_values": "null_with_reason",
     "deduplicate_by": [
@@ -56,6 +59,9 @@
     "verified_launch_identity",
     "ten_minute_coverage_or_explicit_gap_accounting",
     "transaction_signatures_and_provenance",
+    "raw_transaction_observation_stream",
+    "ten_second_coverage_buckets_with_explicit_empty_bucket_semantics",
+    "historical_usd_fdv_supply_holder_and_liquidity_gaps_must_be_explicit",
     "monotonic_pagination",
     "deduplicated_event_keys",
     "schema_validation",
