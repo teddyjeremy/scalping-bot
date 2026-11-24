@@ -1,0 +1,30 @@
+name: Collector preflight (no collection)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ndeda/solana-scalping-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Test all three Helius keys and dataset access
+        run: npm run preflight
