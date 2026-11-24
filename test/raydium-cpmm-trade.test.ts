@@ -40,4 +40,6 @@ test("decodes Raydium CPMM user-side buy amount and transfer fees", () => {
   assert.equal(result[0].quoteAmountRaw, 1_000_100n);
   assert.equal(result[0].tradeFeeRaw, 1000n);
   assert.equal(result[0].creatorFeeRaw, 200n);
+  assert.equal(result[0].preTradeBaseReserveRaw, 2000n);
+  assert.equal(result[0].preTradeQuoteReserveRaw, 1000n);
 });
