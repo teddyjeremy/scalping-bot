@@ -48,7 +48,7 @@ function newMints(tx: ParsedTransactionWithMeta): string[] {
   return [...new Set((tx.meta?.postTokenBalances ?? []).map(x => x.mint).filter(m => !before.has(m)))];
 }
 async function fetchTransaction(signature: string) {
-  for ( (let attempt = 0; attempt < rpc.length; attempt++) ) {
+  for (let attempt = 0; attempt < rpc.length; attempt++) {
     try {
       const tx = await nextRpc().getParsedTransaction(signature, {
         commitment: "confirmed",
