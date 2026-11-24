@@ -36,6 +36,10 @@ type TokenMetrics = {
   lastPriceSol: number | null; lastPriceUsd: number | null; lastPriceObservedAt: number | null;
   highPriceUsd: number | null; lowPriceUsd: number | null;
   snapshotsRecorded: number[];
+  maxDrawdownPct: number | null;
+  timeToTargetsSeconds: Record<string, number | null>;
+  largestBuySol: number;
+  largestSellSol: number;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string;
@@ -80,7 +84,9 @@ function ensureMetrics(item: TokenState): TokenMetrics {
     tradeCount: 0, buyCount: 0, sellCount: 0, volumeSol: 0, volumeUsd: 0,
     uniqueBuyers: [], uniqueSellers: [], firstPriceSol: null, firstPriceUsd: null,
     lastPriceSol: null, lastPriceUsd: null, lastPriceObservedAt: null, highPriceUsd: null, lowPriceUsd: null,
-    snapshotsRecorded: []
+    snapshotsRecorded: [], maxDrawdownPct: null,
+    timeToTargetsSeconds: { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null },
+    largestBuySol: 0, largestSellSol: 0
   };
   return item.metrics;
 }
@@ -104,6 +110,8 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       priceChangePctFromFirstTrade: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
+      maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
+      largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol,
       uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
       priceIsStale: metrics.lastPriceObservedAt == null || observedAt - metrics.lastPriceObservedAt > 5_000,
       pricingMethod: "owner_balance_delta_estimate"
@@ -136,6 +144,15 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (trade.priceUsd != null) {
       metrics.highPriceUsd = metrics.highPriceUsd == null ? trade.priceUsd : Math.max(metrics.highPriceUsd, trade.priceUsd);
       metrics.lowPriceUsd = metrics.lowPriceUsd == null ? trade.priceUsd : Math.min(metrics.lowPriceUsd, trade.priceUsd);
+      const drawdown = metrics.highPriceUsd > 0 ? ((trade.priceUsd / metrics.highPriceUsd) - 1) * 100 : 0;
+      metrics.maxDrawdownPct = Math.min(metrics.maxDrawdownPct ?? 0, drawdown);
+      if (metrics.firstPriceUsd && metrics.firstPriceUsd > 0) {
+        const multiple = trade.priceUsd / metrics.firstPriceUsd;
+        const elapsed = Math.max(0, (Date.now() - item.firstSeenAt) / 1000);
+        for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
+          if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
+        }
+      }
     }
   }
   const latest = observations[observations.length - 1];
