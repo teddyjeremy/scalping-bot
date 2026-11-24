@@ -215,7 +215,7 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     creatorFeeAccruedRaw: curve.creatorFeeAccruedRaw?.toString() ?? null,
     protocolFeesAccruedRaw: curve.protocolFeesAccruedRaw?.toString() ?? null,
     creatorFeeAccruedQuote: curve.creatorFeeAccruedRaw == null ? null : Number(curve.creatorFeeAccruedRaw) / quoteDivisor,
-    protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor
+    protocolFeesAccruedQuote: curve.protocolFeesAccruedRaw == null ? null : Number(curve.protocolFeesAccruedRaw) / quoteDivisor,
     virtualTokenReservesRaw: curve.virtualTokenRaw.toString(), virtualQuoteReservesRaw: curve.virtualSolLamports.toString(),
     realTokenReservesRaw: curve.realTokenRaw.toString(), realQuoteReservesRaw: curve.realSolLamports.toString(),
     virtualQuoteReserves: virtualQuote, realQuoteReserves: realQuote,
