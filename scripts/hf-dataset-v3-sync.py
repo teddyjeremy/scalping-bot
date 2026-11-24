@@ -69,18 +69,18 @@ def load_remote_json(path: str):
 
 
 def local_coin_files(venue: str, mint: str):
-    shard, _ = mint_parts(venue, mint)
+    shard, shard4 = mint_parts(venue, mint)
     launch = ROOT / "launches" / venue / shard / f"{mint}.json"
     summary = ROOT / "launches" / venue / shard / f"{mint}.summary.json"
     trades = ROOT / "trades" / venue / shard / mint
     files = []
     if launch.is_file():
-        files.append(("launch", launch, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/launch.json"))
+        files.append(("launch", launch, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/launch.json"))
     if summary.is_file():
-        files.append(("summary", summary, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/summary.json"))
+        files.append(("summary", summary, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/summary.json"))
     if trades.is_dir():
         for file in sorted(trades.glob("*.jsonl")):
-            files.append(("trade_page", file, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{mint[:4]}/{mint}/transaction_pages/{file.name}"))
+            files.append(("trade_page", file, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/transaction_pages/{file.name}"))
     return files
 
 
@@ -102,7 +102,11 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
     uploaded_failed_count = 0
     summary = None
 
+    changed = set(changed_paths or [])
     for kind, local_file, remote_path in files:
+        relative = local_file.relative_to(ROOT).as_posix()
+        if changed and relative not in changed:
+            continue
         raw = local_file.read_bytes()
         if kind == "trade_page":
             lines = [line for line in raw.splitlines() if line.strip()]
@@ -195,9 +199,9 @@ def publish_batch(paths):
             venue, mint = parts[1], parts[3]
         else:
             continue
-        grouped[(venue, mint)] = True
-    for venue, mint in sorted(grouped):
-        publish_coin(venue, mint)
+        grouped.setdefault((venue, mint), set()).add(p.as_posix())
+    for (venue, mint), changed in sorted(grouped.items()):
+        publish_coin(venue, mint, changed)
     checkpoint = ROOT / "checkpoint.json"
     if checkpoint.is_file():
         upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint")
