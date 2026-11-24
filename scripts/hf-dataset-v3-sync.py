@@ -110,18 +110,21 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         raw = local_file.read_bytes()
         if kind == "trade_page":
             lines = [line for line in raw.splitlines() if line.strip()]
-            trade_lines, failed_lines = [], []
+            trade_lines, failed_lines, transaction_lines = [], [], []
             for line in lines:
                 row = json.loads(line)
                 if row.get("recordType") == "historical_failed_transaction":
                     failed_lines.append(line)
                 elif row.get("recordType") == "historical_trade_event":
                     trade_lines.append(line)
+                elif row.get("recordType") == "historical_transaction_observation":
+                    transaction_lines.append(line)
             stem = local_file.stem
             base = remote_path.rsplit("/", 1)[0]
             outputs = [
                 (f"{base}/trade_events/{stem}.jsonl", b"\n".join(trade_lines) + (b"\n" if trade_lines else b""), len(trade_lines)),
                 (f"{base}/failed_transactions/{stem}.jsonl", b"\n".join(failed_lines) + (b"\n" if failed_lines else b""), len(failed_lines)),
+                (f"{base}/transaction_observations/{stem}.jsonl", b"\n".join(transaction_lines) + (b"\n" if transaction_lines else b""), len(transaction_lines)),
                 (remote_path, raw, len(lines)),
             ]
             for target, data, count in outputs:
@@ -142,7 +145,8 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         if local_summary.is_file():
             summary = json.loads(local_summary.read_text(encoding="utf-8"))
 
-    capture_complete = bool((summary or {}).get("capture", {}).get("complete"))
+    capture_complete = bool((summary or {}).get("capture", {}).get("transactionHistoryComplete"))
+    research_ready = bool((summary or {}).get("capture", {}).get("researchReady"))
     launch_file = ROOT / "launches" / venue / mint_parts(venue, mint)[0] / f"{mint}.json"
     launch_record = json.loads(launch_file.read_text(encoding="utf-8")) if launch_file.is_file() else {}
     window = launch_record.get("historicalWindow") or {}
@@ -195,7 +199,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         "launch_signature": launch_record.get("signature") or (summary or {}).get("launchSignature"),
         "launch_time_utc": iso_epoch(launch_record.get("blockTime") or (summary or {}).get("launchTime")),
         "discovery_source": venue,
-        "state": "COMPLETE" if capture_complete else "COLLECTING",
+        "state": "COMPLETE" if capture_complete and research_ready else ("PARTIAL" if capture_complete else "COLLECTING"),
         "attempt_count": int(ledger.get("attempt_count", 0)) + 1,
         "requested_window": {
             "start_utc": iso_epoch(window.get("start")),
@@ -208,7 +212,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
             "failed_transactions": stream(failed_status, failed_count, failed_signatures),
         },
         "validation": {
-            "level": "COMPLETE" if capture_complete else ("PARTIAL" if page_files else "METADATA_ONLY"),
+            "level": "COMPLETE" if capture_complete and research_ready else ("PARTIAL" if page_files else "METADATA_ONLY"),
             "errors": [],
         },
         "capture": (summary or {}).get("capture"),
@@ -217,7 +221,7 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         "last_error": None,
         "updated_at": now(),
         "last_verified_at": now(),
-        "completion_rule": "COMPLETE only after per-file remote readback SHA-256 verification and summary capture.complete=true",
+        "completion_rule": "Transaction history is resumably complete only after pagination coverage and per-file remote readback SHA-256 verification; research COMPLETE additionally requires capture.researchReady=true. Missing historical USD/FDV/holder/liquidity evidence remains PARTIAL.",
     })
     ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
     API.upload_file(
@@ -319,12 +323,14 @@ def restore():
                     ledger = json.loads(ledger_file.read_text(encoding="utf-8"))
                 except Exception:
                     continue
-                if ledger.get("state") != "COMPLETE":
+                if ledger.get("state") not in ("COMPLETE", "PARTIAL"):
                     continue
                 mint = ledger.get("mint")
                 if not mint:
                     continue
                 capture = ledger.get("capture") or {}
+                if not capture.get("transactionHistoryComplete"):
+                    continue
                 source_states = capture.get("sources") or {}
                 checkpoint_state["tradeCursors"][mint] = {
                     "complete": True,
