@@ -119,7 +119,7 @@ type TokenMetrics = {
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
   launchVerified?: boolean; launchInstruction?: "create" | "create_v2" | "initialize" | "initialize_v2" | "initialize_with_token_2022";
-  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; cpmmPoolAddress?: string; platformConfig?: string;
+  venue?: "pumpfun" | "stonkfun"; quoteMint?: string; poolAddress?: string; pumpSwapPoolAddress?: string; cpmmPoolAddress?: string; lpLockVaultAddress?: string | null; platformConfig?: string;
   firstSeenAt: number; expiresAt: number;
   supplyUi?: number | null; supplyDecimals?: number | null;
   mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null; mintMetadataParsed?: boolean;
@@ -536,6 +536,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     if (migration) {
       migrationDetected = true;
       item.cpmmPoolAddress = migration.pool;
+      item.lpLockVaultAddress = migration.lockLpVault;
       item.quoteMint = migration.quoteMint;
       const metrics = ensureMetrics(item);
       metrics.quoteMint = migration.quoteMint;
@@ -923,6 +924,23 @@ async function recordRaydiumCpmmPoolSnapshot(item: TokenState, poolAddress: stri
   for (const [target, threshold] of [["1.2x", 1.2], ["1.5x", 1.5], ["1.7x", 1.7], ["2x", 2]] as const) {
     if (multiple >= threshold && metrics.timeToTargetsSeconds[target] == null) metrics.timeToTargetsSeconds[target] = elapsed;
   }
+  let lpLockSnapshot: { vault: string; tokenAccountOwner: string | null; amountRaw: string | null; sharePct: number | null } | null = null;
+  if (item.lpLockVaultAddress) {
+    try {
+      const lockInfo = await connection.getAccountInfo(new PublicKey(item.lpLockVaultAddress), "confirmed");
+      if (lockInfo) {
+        const lockAmount = decodeTokenAccountAmount(lockInfo.data, pool.lpMint);
+        const lockOwner = lockInfo.data.length >= 64 ? new PublicKey(lockInfo.data.subarray(32, 64)).toBase58() : null;
+        lpLockSnapshot = {
+          vault: item.lpLockVaultAddress, tokenAccountOwner: lockOwner,
+          amountRaw: lockAmount?.toString() ?? null,
+          sharePct: lockAmount != null && pool.lpSupplyRaw > 0n ? Number(lockAmount) / Number(pool.lpSupplyRaw) * 100 : null
+        };
+      }
+    } catch (error) {
+      console.warn("LP lock vault verification failed:", item.mint, String(error).slice(0, 120));
+    }
+  }
   await appendTokenEvent(item.mint, {
     schemaVersion: 8, kind: "raydium_cpmm_pool_state", mint: item.mint, poolAddress, slot,
     poolOwner: poolInfo.owner.toBase58(), poolCreator: pool.poolCreator,
@@ -931,7 +949,9 @@ async function recordRaydiumCpmmPoolSnapshot(item: TokenState, poolAddress: stri
     baseVault, quoteVault, baseMint: item.mint, quoteMint,
     baseDecimals, quoteDecimals, baseVaultAmountRaw: baseRaw.toString(), quoteVaultAmountRaw: quoteRaw.toString(),
     baseVaultAmount: baseAmount, quoteVaultAmount: quoteAmount, priceQuote, priceSol, priceUsd, quoteUsd,
-    lpMint: pool.lpMint, lpSupplyRaw: pool.lpSupplyRaw.toString(), openTime: pool.openTime.toString(),
+    lpMint: pool.lpMint, lpMintDecimals: pool.lpMintDecimals, lpSupplyRaw: pool.lpSupplyRaw.toString(), openTime: pool.openTime.toString(),
+    lpLockVaultAddress: item.lpLockVaultAddress ?? null, lpLockSnapshot,
+    lpLockShareIsVerifiedTokenAccountBalance: lpLockSnapshot?.amountRaw != null,
     status: pool.status, creatorFeeOn: pool.creatorFeeOn, enableCreatorFee: pool.enableCreatorFee,
     protocolFeesToken0Raw: pool.protocolFeesToken0Raw.toString(), protocolFeesToken1Raw: pool.protocolFeesToken1Raw.toString(),
     fundFeesToken0Raw: pool.fundFeesToken0Raw.toString(), fundFeesToken1Raw: pool.fundFeesToken1Raw.toString(),
