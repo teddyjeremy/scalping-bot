@@ -1283,6 +1283,125 @@ async function backfillActiveMintActivity(item: TokenState) {
   }
 }
 
+type HistoricalSignatureRecord = { signature: string; slot: number; observedAt: number };
+async function loadHistoricalSignatureRecords(item: TokenState): Promise<HistoricalSignatureRecord[]> {
+  const records = new Map<string, HistoricalSignatureRecord>();
+  try {
+    const content = await readFile(path.join(DATA_DIR, "tokens", item.mint, "events.jsonl"), "utf8");
+    for (const line of content.split("\n")) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        const signature = typeof event.signature === "string" ? event.signature
+          : event.kind === "launch_detected" && typeof event.launchSignature === "string" ? event.launchSignature : null;
+        if (!signature) continue;
+        const slot = typeof event.slot === "number" ? event.slot : item.launchSlot ?? 0;
+        const observedAt = typeof event.observedAt === "number" ? event.observedAt
+          : typeof event.blockTime === "number" ? event.blockTime * 1000 : item.firstSeenAt;
+        const prior = records.get(signature);
+        if (!prior || observedAt < prior.observedAt) records.set(signature, { signature, slot, observedAt });
+      } catch { /* Keep valid records even if one JSONL line is malformed. */ }
+    }
+  } catch { /* Missing local event file is handled by bounded RPC discovery below. */ }
+  if (item.launchSignature && !records.has(item.launchSignature)) {
+    records.set(item.launchSignature, { signature: item.launchSignature, slot: item.launchSlot ?? 0, observedAt: item.firstSeenAt });
+  }
+  const nonLaunchCount = [...records.keys()].filter(signature => signature !== item.launchSignature).length;
+  if (nonLaunchCount === 0) {
+    let before: string | undefined;
+    for (let page = 0; page < 2; page++) {
+      const signatures = await nextRpc().getSignaturesForAddress(
+        new PublicKey(item.mint), { limit: 1000, ...(before ? { before } : {}) }, "confirmed"
+      );
+      if (!signatures.length) break;
+      for (const entry of signatures) {
+        if (entry.blockTime == null) continue;
+        const observedAt = entry.blockTime * 1000;
+        if (observedAt >= item.firstSeenAt && observedAt <= item.expiresAt) {
+          records.set(entry.signature, { signature: entry.signature, slot: entry.slot, observedAt });
+        }
+      }
+      const oldest = signatures[signatures.length - 1];
+      if (oldest.blockTime != null && oldest.blockTime * 1000 < item.firstSeenAt) break;
+      before = oldest.signature;
+    }
+  }
+  return [...records.values()].sort((a, b) => a.observedAt - b.observedAt || a.slot - b.slot);
+}
+
+async function backfillExistingTokenMetrics() {
+  const tokens = Object.values(state.tokens).filter(item => item.launchVerified && item.expiresAt <= Date.now());
+  for (const item of tokens) {
+    const metrics = ensureMetrics(item);
+    if (metrics.historicalMetricsBackfillComplete) continue;
+    try {
+      if (item.supplyDecimals == null || item.supplyUi == null) {
+        const supply = await nextRpc().getTokenSupply(new PublicKey(item.mint), "confirmed");
+        item.supplyDecimals = supply.value.decimals;
+        item.supplyUi = Number(supply.value.amount) / (10 ** supply.value.decimals);
+      }
+      if (item.venue === "pumpfun" && !item.quoteMint && !metrics.quoteMint) {
+        const [curveAddress] = PublicKey.findProgramAddressSync(
+          [Buffer.from("bonding-curve"), new PublicKey(item.mint).toBuffer()], PUMP_PROGRAM
+        );
+        const curveInfo = await nextRpc().getAccountInfo(curveAddress, "confirmed");
+        if (curveInfo) {
+          const curve = decodePumpCurve(curveInfo.data);
+          if (curve) {
+            item.quoteMint = curve.quoteMint ?? WRAPPED_SOL_MINT;
+            metrics.quoteMint = item.quoteMint;
+            const decimals = await getMintDecimals(item.quoteMint);
+            if (decimals != null) { metrics.quoteDecimals = decimals; metrics.quoteSymbol = item.quoteMint === WRAPPED_SOL_MINT ? "SOL" : item.quoteMint === USDC_MINT ? "USDC" : item.quoteMint === USDT_MINT ? "USDT" : "UNKNOWN_SPL"; }
+          }
+        }
+      }
+      const records = await loadHistoricalSignatureRecords(item);
+      const processed = new Set(metrics.processedTradeSignatures ?? []);
+      const pending: HistoricalSignatureRecord[] = [];
+      let processedThisRun = 0;
+      for (const record of records) {
+        if (processed.has(record.signature)) continue;
+        if (processedThisRun >= 500) { pending.push(record); continue; }
+        const tx = await fetchTransaction(record.signature);
+        if (!tx) {
+          pending.push(record);
+          state.pendingActivity ??= {};
+          const queue = state.pendingActivity[item.mint] ??= [];
+          if (!queue.some(entry => entry.signature === record.signature) && queue.length < 500) {
+            queue.push({ signature: record.signature, slot: record.slot, observedAt: record.observedAt, logs: [] });
+          }
+          continue;
+        }
+        const isLaunchTransaction = record.signature === item.launchSignature;
+        await processTradeMetrics(item, tx, record.signature, tx.slot ?? record.slot, !isLaunchTransaction, true, record.observedAt);
+        const current = ensureMetrics(item);
+        if (!current.processedTradeSignatures!.includes(record.signature)) {
+          current.processedTradeSignatures!.push(record.signature);
+          if (current.processedTradeSignatures!.length > 20_000) current.processedTradeSignatures = current.processedTradeSignatures!.slice(-10_000);
+        }
+        current.historicalMetricsBackfillSignatureCount = (current.historicalMetricsBackfillSignatureCount ?? 0) + 1;
+        processed.add(record.signature);
+        processedThisRun++;
+        await persistState();
+      }
+      metrics.historicalMetricsBackfillComplete = pending.length === 0;
+      metrics.historicalMetricsBackfillProcessedAt = Date.now();
+      await appendTokenEvent(item.mint, {
+        schemaVersion: 8, kind: "historical_metrics_backfill_summary", mint: item.mint,
+        signaturesDiscovered: records.length, signaturesProcessedThisRun: processedThisRun,
+        signaturesRemaining: pending.length, complete: metrics.historicalMetricsBackfillComplete,
+        holderSnapshotsBackfilled: false,
+        note: "Trade, wallet, fee and reserve-derived metrics replayed chronologically from stored transaction signatures. Historical holder balances are not reconstructed from present-day accounts."
+      });
+      await persistState();
+      console.log("Historical metric replay:", item.mint, "processed:", processedThisRun, "remaining:", pending.length, "complete:", metrics.historicalMetricsBackfillComplete);
+    } catch (error) {
+      console.warn("Historical metric replay paused and will resume:", item.mint, String(error).slice(0, 180));
+      await persistState();
+    }
+  }
+}
+
 async function captureMint(item: TokenState) {
   const { mint, expiresAt } = item;
   if (activeSubscriptions.has(mint) || expiresAt <= Date.now()) return;
