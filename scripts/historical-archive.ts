@@ -147,44 +147,80 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   state.programs[program] = progress;
   await save();
 }
-function impliedQuotePrice(quoteRaw: bigint, tokenRaw: bigint, tokenDecimals: number | null, quoteDecimals: number | null): string | null {\n  if (tokenDecimals == null || quoteDecimals == null || tokenRaw <= 0n) return null;\n  const scale = 10n ** 18n;\n  const numerator = quoteRaw * (10n ** BigInt(tokenDecimals)) * scale;\n  const denominator = tokenRaw * (10n ** BigInt(quoteDecimals));\n  const value = numerator / denominator;\n  const whole = value / scale;\n  const fraction = (value % scale).toString().padStart(18, "0").replace(/0+$/, "");\n  return fraction ? `${whole}.${fraction}` : whole.toString();\n}\nasync function collectMintTrades(record: Cursor["launches"][string]) {
-  const file = path.join(ROOT, "trades", record.venue, record.mint + ".jsonl");
-  await mkdir(path.dirname(file), { recursive: true });
+function impliedQuotePrice(quoteRaw: bigint, tokenRaw: bigint, tokenDecimals: number | null, quoteDecimals: number | null): string | null {
+  if (tokenDecimals == null || quoteDecimals == null || tokenRaw <= 0n) return null;
+  const scale = 10n ** 18n;
+  const numerator = quoteRaw * (10n ** BigInt(tokenDecimals)) * scale;
+  const denominator = tokenRaw * (10n ** BigInt(quoteDecimals));
+  const value = numerator / denominator;
+  const whole = value / scale;
+  const fraction = (value % scale).toString().padStart(18, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+async function collectMintTrades(record: Cursor["launches"][string]) {
+  const directory = path.join(ROOT, "trades", record.venue, record.mint);
+  await mkdir(directory, { recursive: true });
   const until = record.blockTime + CAPTURE_SECONDS;
-  const progress = state.tradeCursors![record.mint] ?? { complete: false, pages: 0 };
-  while (!progress.complete && progress.pages < MAX_PAGES) {
-    const page = await rpc("getSignaturesForAddress(mint)", c => c.getSignaturesForAddress(new PublicKey(record.mint), { limit: 100, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
-    if (!page.length) { progress.complete = true; state.tradeCursors![record.mint] = progress; await save(); break; }
-    let reachedLaunchBoundary = false;
-    const lines: string[] = [];
-    for (const item of [...page].reverse()) {
-      if (item.blockTime == null) continue;
-      if (item.blockTime < record.blockTime) { reachedLaunchBoundary = true; continue; }
-      if (item.blockTime > until) continue;
-      const tx = await fetchTx(item.signature);
-      if (!tx?.meta || tx.meta.err) continue;
-      const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, instructions(tx));
-      for (const event of decoded) lines.push(JSON.stringify({
-        schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
-        launchSignature: record.signature, signature: item.signature, slot: item.slot,
-        blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime, eventTimestamp: event.timestamp,
-        side: event.side, user: event.user, tokenAmountRaw: event.tokenAmountRaw.toString(),
-        quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(),
-        protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
-        platformFeeRaw: event.platformFeeRaw?.toString() ?? null,
-        lpFeeRaw: event.lpFeeRaw?.toString() ?? null, creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
-        shareFeeRaw: event.shareFeeRaw?.toString() ?? null, transactionFeeLamports: tx.meta.fee,
-        computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
-        preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
-        preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
-        reserveEvidence: { virtualQuoteReservesRaw: event.virtualQuoteReservesRaw?.toString() ?? null, realQuoteReservesRaw: event.realQuoteReservesRaw?.toString() ?? null, preTradeBaseReserveRaw: event.preTradeBaseReserveRaw?.toString() ?? null, preTradeQuoteReserveRaw: event.preTradeQuoteReserveRaw?.toString() ?? null },
-        impliedQuotePrice: impliedQuotePrice(event.quoteAmountRaw, event.tokenAmountRaw, tx.meta.preTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? tx.meta.postTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? null, event.quoteMint === "So11111111111111111111111111111111111111112" ? 9 : (tx.meta.preTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals ?? tx.meta.postTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals ?? null)),\n        dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null, tokenDecimalsKnown: tx.meta.preTokenBalances?.some(x => x.mint === record.mint) || tx.meta.postTokenBalances?.some(x => x.mint === record.mint), quoteDecimalsKnown: event.quoteMint === "So11111111111111111111111111111111111111112" || tx.meta.preTokenBalances?.some(x => x.mint === event.quoteMint) || tx.meta.postTokenBalances?.some(x => x.mint === event.quoteMint) }
-      }));
+  const curve = record.venue === "pumpfun"
+    ? PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), new PublicKey(record.mint).toBuffer()], new PublicKey(PUMP))[0].toBase58()
+    : null;
+  const addresses = [...new Set([record.mint, record.pool, curve].filter((v): v is string => Boolean(v)))];
+  const progress = state.tradeCursors![record.mint] ?? { complete: false, pages: 0, sources: {} };
+  progress.sources ??= {};
+  for (let sourceIndex = 0; sourceIndex < addresses.length; sourceIndex++) {
+    const address = addresses[sourceIndex];
+    const source = progress.sources[address] ?? { complete: false, pages: 0 };
+    while (!source.complete && source.pages < MAX_PAGES) {
+      const page = await rpc("getSignaturesForAddress(source)", c => c.getSignaturesForAddress(new PublicKey(address), { limit: 100, ...(source.before ? { before: source.before } : {}) }, "confirmed"));
+      if (!page.length) { source.complete = true; break; }
+      let reachedLaunchBoundary = false;
+      const lines: string[] = [];
+      for (const item of [...page].reverse()) {
+        if (item.blockTime == null) continue;
+        if (item.blockTime < record.blockTime) { reachedLaunchBoundary = true; continue; }
+        if (item.blockTime > until) continue;
+        const tx = await fetchTx(item.signature);
+        if (!tx?.meta || tx.meta.err) continue;
+        const decoded = decodeProgramTradeEvents(tx.meta.logMessages, record.mint, instructions(tx));
+        for (const event of decoded) {
+          const tokenDecimals = tx.meta.preTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals
+            ?? tx.meta.postTokenBalances?.find(x => x.mint === record.mint)?.uiTokenAmount.decimals ?? null;
+          const quoteDecimals = event.quoteMint === "So11111111111111111111111111111111111111112" ? 9
+            : tx.meta.preTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals
+            ?? tx.meta.postTokenBalances?.find(x => x.mint === event.quoteMint)?.uiTokenAmount.decimals ?? null;
+          lines.push(JSON.stringify({
+            schemaVersion: 1, recordType: "historical_trade_event", venue: event.venue, mint: record.mint,
+            launchSignature: record.signature, signature: item.signature, sourceAddress: address,
+            slot: item.slot, blockTime: item.blockTime, secondsSinceLaunch: item.blockTime - record.blockTime,
+            eventTimestamp: event.timestamp, side: event.side, user: event.user,
+            tokenAmountRaw: event.tokenAmountRaw.toString(), tokenDecimals,
+            quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(), quoteDecimals,
+            protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
+            platformFeeRaw: event.platformFeeRaw?.toString() ?? null,
+            lpFeeRaw: event.lpFeeRaw?.toString() ?? null, creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
+            shareFeeRaw: event.shareFeeRaw?.toString() ?? null, transactionFeeLamports: tx.meta.fee,
+            computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
+            preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
+            preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
+            reserveEvidence: { virtualQuoteReservesRaw: event.virtualQuoteReservesRaw?.toString() ?? null, realQuoteReservesRaw: event.realQuoteReservesRaw?.toString() ?? null, preTradeBaseReserveRaw: event.preTradeBaseReserveRaw?.toString() ?? null, preTradeQuoteReserveRaw: event.preTradeQuoteReserveRaw?.toString() ?? null },
+            impliedQuotePrice: impliedQuotePrice(event.quoteAmountRaw, event.tokenAmountRaw, tokenDecimals, quoteDecimals),
+            dataQuality: { decodedFromProgramEvent: true, historicalHolderSnapshot: false, priceUsd: null, fdvUsd: null, tokenDecimalsKnown: tokenDecimals != null, quoteDecimalsKnown: quoteDecimals != null }
+          }));
+        }
+      }
+      const pageFile = path.join(directory, `source-${sourceIndex}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
+      await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
+      source.before = page[page.length - 1].signature;
+      source.pages++;
+      if (reachedLaunchBoundary || page.length < 100) source.complete = true;
+      progress.sources[address] = source;
+      progress.pages = Object.values(progress.sources).reduce((sum, item) => sum + item.pages, 0);
+      progress.complete = addresses.every(candidate => progress.sources?.[candidate]?.complete);
+      state.tradeCursors![record.mint] = progress;
+      await save();
     }
-    if (lines.length) await appendFile(file, lines.join("\n") + "\n");
-    progress.before = page[page.length - 1].signature;
-    progress.pages++;
-    if (reachedLaunchBoundary || page.length < 100) progress.complete = true;
+    progress.sources[address] = source;
+    progress.complete = addresses.every(candidate => progress.sources?.[candidate]?.complete);
     state.tradeCursors![record.mint] = progress;
     await save();
   }
