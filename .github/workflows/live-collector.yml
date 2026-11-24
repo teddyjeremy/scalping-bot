@@ -31,7 +31,9 @@ jobs:
       HF_DATASET_REPO: ndeda/solana-scalping-data
       CAPTURE_MINUTES: "10"
       RUN_FOR_MINUTES: "120"
-      HELIUS_TX_MIN_INTERVAL_MS: "350"
+      HELIUS_RPC_MIN_INTERVAL_MS: "100"
+      HELIUS_RPC_COOLDOWN_MS: "30000"
+      MIN_LOCKED_LP_SHARE_PCT: "90"
       DATA_DIR: ./data
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +44,8 @@ jobs:
         shell: bash
         run: |
           test -n "$HELIUS_API_KEY_1" || { echo "::error::Missing HELIUS_API_KEY_1 repository secret"; exit 1; }
+          test -n "$HELIUS_API_KEY_2" || { echo "::error::Missing HELIUS_API_KEY_2 repository secret"; exit 1; }
+          test -n "$HELIUS_API_KEY_3" || { echo "::error::Missing HELIUS_API_KEY_3 repository secret"; exit 1; }
           test -n "$HF_TOKEN" || { echo "::error::Missing HF_TOKEN repository secret"; exit 1; }
       - name: Install dependencies
         run: npm install
