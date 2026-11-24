@@ -1,6 +1,10 @@
 name: Historical Solana research archive
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".historical-archive-start"
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
@@ -16,7 +20,7 @@ on:
         default: "2026-11-24"
         type: string
       max_pages:
-        description: "Maximum 100-signature pages per address per run"
+        description: "Maximum 1000-transaction pages per address per run"
         required: true
         default: "100"
         type: string
