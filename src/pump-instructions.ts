@@ -25,7 +25,7 @@ export function decodeBase58(value: string): Uint8Array {
   return Uint8Array.from([...Array(leadingZeroes).fill(0), ...bytes]);
 }
 
-export type PumpCreateInstruction = { mint: string; kind: "create" | "create_v2" };
+export type PumpCreateInstruction = { mint: string; creator: string | null; kind: "create" | "create_v2" };
 
 export function findPumpCreateInstructions(
   instructions: Array<{ programId?: unknown; data?: unknown; accounts?: unknown[] }>,
@@ -43,7 +43,7 @@ export function findPumpCreateInstructions(
     if (!kind) continue;
     const mintAccount = instruction.accounts[0];
     if (!mintAccount) continue;
-    found.push({ mint: String(mintAccount), kind });
+    const creator = instruction.accounts[5] ? String(instruction.accounts[5]) : null;\n    found.push({ mint: String(mintAccount), creator, kind });
   }
   return found;
 }
