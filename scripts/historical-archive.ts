@@ -382,8 +382,24 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
             quoteMint: event.quoteMint, quoteAmountRaw: event.quoteAmountRaw.toString(), quoteDecimals,
             protocolFeeRaw: event.protocolFeeRaw?.toString() ?? null,
             platformFeeRaw: event.platformFeeRaw?.toString() ?? null,
-            lpFeeRaw: event.lpFeeRaw?.toString() ?? null, creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
-            shareFeeRaw: event.shareFeeRaw?.toString() ?? null, transactionFeeLamports: tx.meta.fee,
+            lpFeeRaw: event.lpFeeRaw?.toString() ?? null,
+            creatorFeeRaw: event.creatorFeeRaw?.toString() ?? null,
+            shareFeeRaw: event.shareFeeRaw?.toString() ?? null,
+            cashbackRaw: event.cashbackRaw?.toString() ?? null,
+            buybackFeeRaw: event.buybackFeeRaw?.toString() ?? null,
+            tradeFeeRaw: event.tradeFeeRaw?.toString() ?? null,
+            tradeFeeMint: event.tradeFeeMint ?? null,
+            venueTradeFeeRaw: event.venueTradeFeeRaw?.toString() ?? null,
+            venueTradeFeeMint: event.venueTradeFeeMint ?? null,
+            creatorFeeMint: event.creatorFeeMint ?? null,
+            inputTransferFeeRaw: event.inputTransferFeeRaw?.toString() ?? null,
+            outputTransferFeeRaw: event.outputTransferFeeRaw?.toString() ?? null,
+            protocolFeeBps: event.protocolFeeBps?.toString() ?? null,
+            lpFeeBps: event.lpFeeBps?.toString() ?? null,
+            creatorFeeBps: event.creatorFeeBps?.toString() ?? null,
+            eventName: event.eventName, instructionName: event.instructionName,
+            pool: event.pool, eventCreator: event.creator, feeRecipient: event.feeRecipient,
+            transactionFeeLamports: tx.meta.fee,
             computeUnitsConsumed: tx.meta.computeUnitsConsumed ?? null,
             preTokenBalances: tx.meta.preTokenBalances ?? [], postTokenBalances: tx.meta.postTokenBalances ?? [],
             preBalances: tx.meta.preBalances, postBalances: tx.meta.postBalances,
@@ -436,6 +452,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   let sellEvents = 0;
   let transactionObservations = 0;
   const observedTransactions = new Set<string>();
+  const feeTotalsByMint = new Map<string, Map<string, bigint>>();
   const coverageBuckets = new Map<number, number>();
   let earliestObservedOffset: number | null = null;
   let latestObservedOffset: number | null = null;
@@ -469,6 +486,26 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
         continue;
       }
       if (event.recordType !== "historical_trade_event") continue;
+      const feeFields: Array<[string, unknown, unknown]> = [
+        ["protocol", event.protocolFeeRaw, event.quoteMint],
+        ["platform", event.platformFeeRaw, event.quoteMint],
+        ["lp", event.lpFeeRaw, event.quoteMint],
+        ["creator", event.creatorFeeRaw, event.creatorFeeMint ?? event.quoteMint],
+        ["share", event.shareFeeRaw, event.quoteMint],
+        ["cashback", event.cashbackRaw, event.quoteMint],
+        ["buyback", event.buybackFeeRaw, event.quoteMint],
+        ["trade", event.tradeFeeRaw, event.tradeFeeMint ?? event.quoteMint],
+        ["venueTrade", event.venueTradeFeeRaw, event.venueTradeFeeMint ?? event.quoteMint],
+        ["inputTransfer", event.inputTransferFeeRaw, event.quoteMint],
+        ["outputTransfer", event.outputTransferFeeRaw, event.quoteMint]
+      ];
+      for (const [feeName, rawFee, feeMint] of feeFields) {
+        if (typeof rawFee !== "string" || !feeMint || !/^\\d+$/.test(rawFee)) continue;
+        const mint = String(feeMint);
+        const totals = feeTotalsByMint.get(mint) ?? new Map<string, bigint>();
+        totals.set(feeName, (totals.get(feeName) ?? 0n) + BigInt(rawFee));
+        feeTotalsByMint.set(mint, totals);
+      }
       const user = String(event.user ?? "");
       const side = event.side === "buy" || event.side === "sell" ? event.side : null;
       const quoteMint = String(event.quoteMint ?? "");
@@ -509,6 +546,9 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       profilesByQuoteMint.set(quoteMint, profiles);
     }
   }
+  const feeSummaryByMint = Object.fromEntries([...feeTotalsByMint.entries()].map(([mint, totals]) => [
+    mint, Object.fromEntries([...totals.entries()].map(([name, raw]) => [name + "FeeRaw", raw.toString()]))
+  ]));
   const priceSummaryByQuoteMint: Record<string, unknown> = {};
   for (const [quoteMint, points] of pricesByQuoteMint) {
     points.sort((a, b) => a.at - b.at || a.slot - b.slot);
@@ -585,6 +625,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       sources: Object.fromEntries(Object.entries(state.tradeCursors?.[record.mint]?.sources ?? {}).map(([address, cursor]) => [address, { complete: cursor.complete, pages: cursor.pages }]))
     },
     networkFees: { launchTransactionFeeLamports: launchEvidence.transaction?.feeLamports ?? null, uniqueTradeTransactions: tradeFees.size, tradeTransactionFeeLamportsTotal: [...tradeFees.values()].reduce((sum, value) => sum + value, 0), failedTransactions: failedFees.size, failedTransactionFeeLamportsTotal: [...failedFees.values()].reduce((sum, value) => sum + value, 0) },
+    protocolAndVenueFeesByMintRaw: feeSummaryByMint,
     developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
