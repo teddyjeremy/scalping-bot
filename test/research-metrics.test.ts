@@ -37,7 +37,7 @@ test("holder concentration returns HHI, effective holders and Gini", () => {
   const result = calculateHolderConcentration([{ amount: 90 }, { amount: 10 }]);
   assert.ok(Math.abs(result.hhi - 0.82) < 1e-12);
   assert.ok(result.effectiveHolderCount != null && result.effectiveHolderCount < 2);
-  assert.equal(result.gini, 0.4);
+  assert.ok(Math.abs(result.gini - 0.4) < 1e-12);
 });
 
 test("constant product estimate accounts for fee and worsens with larger orders", () => {
