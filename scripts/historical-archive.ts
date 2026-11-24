@@ -370,8 +370,12 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const names = (await readdir(directory)).filter(name => name.endsWith(".jsonl")).sort();
   const profilesByQuoteMint = new Map<string, Record<string, WalletProfile>>();
   const pricesByQuoteMint = new Map<string, Array<{ at: number; price: number; slot: number }>>();
+  const launchEvidence = JSON.parse(await readFile(path.join(ROOT, "launches", record.venue, record.mint + ".json"), "utf8")) as { transaction?: { feeLamports?: number | null } };
   const sourceHash = createHash("sha256");
   const seen = new Set<string>();
+  const failedSeen = new Set<string>();
+  const tradeFees = new Map<string, number>();
+  const failedFees = new Map<string, number>();
   const buyers = new Set<string>();
   const sellers = new Set<string>();
   let buyEvents = 0;
@@ -385,8 +389,15 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     for (const line of content.split("\n")) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as Record<string, unknown>;
-      if (event.recordType !== "historical_trade_event") continue;
       const signature = String(event.signature ?? "");
+      if (event.recordType === "historical_failed_transaction") {
+        if (signature && !failedSeen.has(signature)) {
+          failedSeen.add(signature);
+          failedFees.set(signature, typeof event.transactionFeeLamports === "number" ? event.transactionFeeLamports : 0);
+        }
+        continue;
+      }
+      if (event.recordType !== "historical_trade_event") continue;
       const user = String(event.user ?? "");
       const side = event.side === "buy" || event.side === "sell" ? event.side : null;
       const quoteMint = String(event.quoteMint ?? "");
@@ -396,6 +407,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       if (!signature || !user || !side || !quoteMint || tokenRaw <= 0n || quoteRaw <= 0n) continue;
       if (seen.has(dedupe)) { duplicateEvents++; continue; }
       seen.add(dedupe);
+      if (typeof event.transactionFeeLamports === "number") tradeFees.set(signature, event.transactionFeeLamports);
       if (side === "buy") { buyEvents++; buyers.add(user); } else { sellEvents++; sellers.add(user); }
       const tokenDecimals = typeof event.tokenDecimals === "number" ? event.tokenDecimals : null;
       const quoteDecimals = typeof event.quoteDecimals === "number" ? event.quoteDecimals : null;
@@ -475,6 +487,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     launchSignature: record.signature, launchTime: record.blockTime, launchSlot: record.slot,
     creator: record.creator, launchFeePayer: record.feePayer, quoteMintAtLaunch: record.quoteMint,
     tradeEvents: { total: buyEvents + sellEvents, buys: buyEvents, sells: sellEvents, uniqueBuyers: buyers.size, uniqueSellers: sellers.size, duplicateEventsRemoved: duplicateEvents, missingDecimalEvents },
+    networkFees: { launchTransactionFeeLamports: launchEvidence.transaction?.feeLamports ?? null, uniqueTradeTransactions: tradeFees.size, tradeTransactionFeeLamportsTotal: [...tradeFees.values()].reduce((sum, value) => sum + value, 0), failedTransactions: failedFees.size, failedTransactionFeeLamportsTotal: [...failedFees.values()].reduce((sum, value) => sum + value, 0) },
     developerActivity: { creatorWallets, launchFeePayerWallets: feePayerWallets, profiles: [...creatorWallets, ...feePayerWallets].filter((v, i, a) => a.indexOf(v) === i) },
     priceSummaryByQuoteMint, walletCohortsByQuoteMint: cohortsByQuoteMint,
     dataQuality: {
