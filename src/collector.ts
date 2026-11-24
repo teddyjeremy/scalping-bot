@@ -527,8 +527,24 @@ function refreshWalletCohorts(item: TokenState) {
   metrics.walletCohorts = summarizeWalletCohorts(metrics.walletProfiles);
 }
 async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMeta, signature: string, slot: number, allowEstimated = true) {
+  const allInstructions = allTransactionInstructions(tx);
+  let migrationDetected = false;
+  if (item.venue === "stonkfun") {
+    const migration = findLaunchLabCpmmMigration(allInstructions, item.mint);
+    if (migration) {
+      migrationDetected = true;
+      item.cpmmPoolAddress = migration.pool;
+      item.quoteMint = migration.quoteMint;
+      const metrics = ensureMetrics(item);
+      metrics.quoteMint = migration.quoteMint;
+      const decimals = await getMintDecimals(migration.quoteMint);
+      if (decimals != null) metrics.quoteDecimals = decimals;
+      await persistState();
+      void subscribeRaydiumCpmmPool(item, migration.pool);
+    }
+  }
   if (item.venue === "pumpfun") {
-    const poolDiscovery = findPumpSwapPoolFromInstructions(allTransactionInstructions(tx), item.mint);
+    const poolDiscovery = findPumpSwapPoolFromInstructions(allInstructions, item.mint);
     if (poolDiscovery && (!item.quoteMint || item.quoteMint === poolDiscovery.quoteMint)) {
       if (item.pumpSwapPoolAddress !== poolDiscovery.pool) item.pumpSwapPoolAddress = poolDiscovery.pool;
       if (!item.quoteMint) {
@@ -548,9 +564,8 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const metrics = ensureMetrics(item);
   if (metrics.processedTradeSignatures!.includes(signature)) return;
   const solUsd = await getSolUsd();
-  if (metrics.processedTradeSignatures!.includes(signature)) return;
   const knownQuoteMint = item.quoteMint ?? metrics.quoteMint;
-  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allTransactionInstructions(tx));
+  const decodedEvents = decodeProgramTradeEvents(tx.meta?.logMessages, item.mint, allInstructions);
   const observations: import("./metrics.js").TradeObservation[] = [];
   if (decodedEvents.length > 0 && item.supplyDecimals != null) {
     for (const event of decodedEvents) {
@@ -590,7 +605,7 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   const usedExactEvents = observations.length > 0;
   const quoteMint = observations[0]?.quoteMint ?? knownQuoteMint;
   if (!usedExactEvents) {
-    if (!allowEstimated || !knownQuoteMint) return;
+    if (!allowEstimated || !knownQuoteMint || migrationDetected) return;
     observations.push(...deriveTradeObservations(tx, item.mint, solUsd, knownQuoteMint));
   }
   if (observations.length === 0) return;
