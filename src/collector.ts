@@ -197,6 +197,8 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
 }
 async function recordDueSnapshots(item: TokenState, observedAt: number) {
   const metrics = ensureMetrics(item);
+  // Wait for the bonding-curve account; do not permanently record empty/estimated snapshots.
+  if (metrics.priceSource !== "pump_bonding_curve_virtual_reserves") return;
   const elapsedSeconds = Math.max(0, (observedAt - item.firstSeenAt) / 1000);
   for (const seconds of SNAPSHOT_SECONDS) {
     if (elapsedSeconds < seconds || metrics.snapshotsRecorded.includes(seconds)) continue;
