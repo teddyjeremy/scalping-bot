@@ -755,7 +755,9 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
     const profile = metrics.walletProfiles[trade.wallet];
     metrics.recentTradeSignals!.push({
       at: observedAt, side: trade.side, quoteAmount: trade.quoteAmount, wallet: trade.wallet,
-      isCreator: profile.creator || profile.launchFeePayer, botScore: profile.botScore, confidence: trade.confidence, priceUsd: trade.priceUsd
+      isCreator: profile.creator || profile.launchFeePayer, botScore: profile.botScore,
+      sniperCandidate: profile.sniperCandidate, bundleCandidate: profile.bundleCandidate,
+      confidence: trade.confidence, priceUsd: trade.priceUsd
     });
     metrics.recentTradeSignals = metrics.recentTradeSignals!.filter(signal => observedAt - signal.at <= 120_000).slice(-500);
     await appendTokenEvent(item.mint, {
