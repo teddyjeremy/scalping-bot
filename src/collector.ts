@@ -490,7 +490,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
         largestBuySol: metrics.largestBuySol, largestSellSol: metrics.largestSellSol,
         largestBuyQuote: metrics.largestBuyQuote, largestSellQuote: metrics.largestSellQuote,
         uniqueBuyers: metrics.uniqueBuyers.length, uniqueSellers: metrics.uniqueSellers.length,
-        walletCohorts: metrics.walletCohorts ?? summarizeWalletCohorts(metrics.walletProfiles),
+        walletCohorts: metrics.walletCohorts ?? summarizeWalletCohorts(metrics.walletProfiles, metrics.lastPriceQuote),
         networkFeesLamports: metrics.networkFeesLamports,
         networkFeeTransactions: metrics.networkFeeTransactions ?? 0,
         estimatedPriorityFeeLamports: metrics.estimatedPriorityFeeLamports,
