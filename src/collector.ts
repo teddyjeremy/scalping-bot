@@ -12,6 +12,8 @@ import { findStonkFunLaunchInstructions } from "./launchlab-instructions.js";
 import { getTopLevelInstructions } from "./transaction-instructions.js";
 import { decodeLaunchLabPoolState, decodePumpSwapPoolState, decodeRaydiumCpmmPoolState, decodeTokenAccountAmount, findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions, RAYDIUM_CPMM_PROGRAM } from "./pool-state.js";
 import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
+import { evaluateDiscoveryCandidate, type LiquidityEvidence } from "./discovery-policy.js";
+import { evaluateScalpDecision, type PaperPosition, type RecentTradeSignal } from "./paper-strategy.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const LAUNCHLAB_PROGRAM = new PublicKey("LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj");
@@ -38,15 +40,18 @@ const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, proces
 if (keys.length === 0) throw new Error("Set at least HELIUS_API_KEY_1 in your environment.");
 if (keys.length !== 3) console.warn(`Only ${keys.length} Helius API key(s) configured; using available key(s).`);
 const rpc = keys.map(key => new Connection(`https://mainnet.helius-rpc.com/?api-key=${key}`, "confirmed"));
-const RPC_MIN_INTERVAL_MS = Math.max(250, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? process.env.HELIUS_TX_MIN_INTERVAL_MS ?? 350));
+const RPC_MIN_INTERVAL_MS = Math.max(50, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? process.env.HELIUS_TX_MIN_INTERVAL_MS ?? 100));
+const RPC_COOLDOWN_MS = Math.max(5_000, Number(process.env.HELIUS_RPC_COOLDOWN_MS ?? 30_000));
 const rpcTails = new WeakMap<Connection, Promise<void>>();
 const rpcLastStartedAt = new WeakMap<Connection, number>();
+const rpcCooldownUntil = new WeakMap<Connection, number>();
 const RATE_LIMITED_RPC_METHODS = new Set([
   "getAccountInfo", "getParsedAccountInfo", "getTokenSupply", "getSignaturesForAddress",
   "getParsedTransaction", "getTransaction", "getMultipleAccountsInfo", "getProgramAccounts", "getTokenLargestAccounts",
   "onLogs", "onAccountChange"
 ]);
 const rateLimitedConnections = new WeakMap<Connection, Connection>();
+let rpcCursor = 0;
 function rateLimitConnection(connection: Connection): Connection {
   const existing = rateLimitedConnections.get(connection);
   if (existing) return existing;
@@ -56,35 +61,44 @@ function rateLimitConnection(connection: Connection): Connection {
       if (typeof property !== "string" || !RATE_LIMITED_RPC_METHODS.has(property) || typeof value !== "function") {
         return typeof value === "function" ? value.bind(target) : value;
       }
-      return (...args: unknown[]) => {
-        const previous = rpcTails.get(target) ?? Promise.resolve();
-        const request = previous.then(async () => {
-          const wait = Math.max(0, (rpcLastStartedAt.get(target) ?? 0) + RPC_MIN_INTERVAL_MS - Date.now());
-          if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-          let lastError: unknown;
-          for (let attempt = 0; attempt < 4; attempt++) {
-            rpcLastStartedAt.set(target, Date.now());
-            try {
-              return await (value as (...callArgs: unknown[]) => Promise<unknown>).apply(target, args);
-            } catch (error) {
-              lastError = error;
-              if (!/429|too many requests|rate.?limit/i.test(String(error)) || attempt === 3) throw error;
-              const delay = Math.min(20_000, 1_000 * (2 ** attempt));
-              console.warn("Helius RPC rate limited; backing off:", property, delay, "ms");
-              await new Promise(resolve => setTimeout(resolve, delay));
-            }
-          }
-          throw lastError;
-        });
-        rpcTails.set(target, request.then(() => undefined, () => undefined));
-        return request;
-      };
+      return (...args: unknown[]) => invokeRpcWithFailover(target, property, args);
     }
   });
   rateLimitedConnections.set(connection, proxy);
   return proxy;
 }
-let rpcCursor = 0;
+async function invokeRpcWithFailover<T>(preferred: Connection, method: string, args: unknown[]): Promise<T> {
+  const attempted = new Set<Connection>();
+  let lastError: unknown;
+  for (let attempt = 0; attempt < rpc.length; attempt++) {
+    const preferredIndex = rpc.indexOf(preferred);
+    const candidate = attempt === 0 ? preferred : rpc[(preferredIndex + attempt + rpc.length) % rpc.length];
+    if (attempted.has(candidate)) continue;
+    attempted.add(candidate);
+    const previous = rpcTails.get(candidate) ?? Promise.resolve();
+    const request = previous.then(async () => {
+      const cooldown = Math.max(0, (rpcCooldownUntil.get(candidate) ?? 0) - Date.now());
+      if (cooldown) await new Promise(resolve => setTimeout(resolve, cooldown));
+      const pacing = Math.max(0, (rpcLastStartedAt.get(candidate) ?? 0) + RPC_MIN_INTERVAL_MS - Date.now());
+      if (pacing) await new Promise(resolve => setTimeout(resolve, pacing));
+      rpcLastStartedAt.set(candidate, Date.now());
+      const methodFn = Reflect.get(candidate, method, candidate) as (...callArgs: unknown[]) => T;
+      return await methodFn.apply(candidate, args);
+    });
+    rpcTails.set(candidate, request.then(() => undefined, () => undefined));
+    try { return await request as T; }
+    catch (error) {
+      lastError = error;
+      if (!/429|too many requests|rate.?limit/i.test(String(error))) throw error;
+      rpcCooldownUntil.set(candidate, Date.now() + RPC_COOLDOWN_MS);
+      console.warn("Helius RPC key rate-limited; cooling it down and failing over:", method, "cooldownMs:", RPC_COOLDOWN_MS);
+    }
+  }
+  const waitUntil = Math.min(...rpc.map(connection => rpcCooldownUntil.get(connection) ?? 0));
+  const wait = Math.max(0, waitUntil - Date.now());
+  if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+  throw lastError ?? new Error("All configured Helius RPC connections are unavailable.");
+}
 const nextRpc = () => rateLimitConnection(rpc[(rpcCursor++) % rpc.length]);
 
 type TokenMetrics = {
@@ -116,7 +130,7 @@ type TokenMetrics = {
   walletCohorts?: ReturnType<typeof summarizeWalletCohorts>;
   holderSnapshotsRecorded?: number[];
   exactTradeCount?: number; estimatedTradeCount?: number; processedFeeSignatures?: string[]; processedTradeSignatures?: string[]; historicalMetricsBackfillComplete?: boolean; historicalMetricsBackfillProcessedAt?: number; historicalMetricsBackfillSignatureCount?: number;
-  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; buyPriceImpactSamples?: number[]; sellPriceImpactSamples?: number[]; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
+  networkFeesLamports?: number | null; networkFeeTransactions?: number; estimatedPriorityFeeLamports?: number | null; baseSignatureFeeLamports?: number | null; lastFeePayer?: string | null; walletNetworkFeesLamports?: Record<string, number>; venueTradeFeesQuote?: number | null; venueTradeFeesBase?: number | null; inputTransferFeesQuote?: number | null; outputTransferFeesQuote?: number | null; inputTransferFeesBase?: number | null; outputTransferFeesBase?: number | null; buyPriceImpactSamples?: number[]; sellPriceImpactSamples?: number[]; recentTradeSignals?: RecentTradeSignal[]; lastRealQuoteReserveUsd?: number | null; protocolFeesQuote?: number | null; platformFeesQuote?: number | null; creatorFeesQuote?: number | null; creatorFeesBase?: number | null; tradeFeesQuote?: number | null; tradeFeesBase?: number | null; shareFeesQuote?: number | null; lpFeesQuote?: number | null; cashbackFeesQuote?: number | null; buybackFeesQuote?: number | null;
 };
 type TokenState = {
   mint: string; creator: string | null; launchSignature: string; launchFeePayer?: string | null; launchSlot?: number;
@@ -126,6 +140,9 @@ type TokenState = {
   supplyUi?: number | null; supplyDecimals?: number | null;
   mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null; mintMetadataParsed?: boolean;
   tokenProgramOwner?: string | null; tokenExtensions?: Array<{ extension: string; state?: unknown }> | null;
+  discoveryStatus?: "pending" | "eligible" | "rejected" | "expired"; discoveryReasons?: string[]; discoveryLastCheckedAt?: number; detailedCaptureStarted?: boolean;
+  fdvUsdAtScreen?: number | null; liquidityEvidenceKind?: "bonding_curve" | "locked_lp" | null;
+  paperPosition?: PaperPosition | null; paperLastDecisionAt?: number;
   metrics?: TokenMetrics;
 };
 type CollectorState = {
@@ -151,6 +168,7 @@ let qualityManifest: { schemaVersion: number; generatedAt: number; rules: string
 };
 let state: CollectorState = { tokens: {}, seenLaunchSignatures: [] };
 const activeSubscriptions = new Map<string, { connection: Connection; id: number; curveId?: number; ammIds?: number[]; ammPoolAddress?: string; timer?: NodeJS.Timeout }>();
+const discoverySubscriptions = new Map<string, { connection: Connection; id: number; timer?: NodeJS.Timeout }>();
 const pumpSwapSubscriptionPending = new Set<string>();
 const activitySignatures = new Map<string, Set<string>>();
 let discoverySubscription: { connection: Connection; id: number } | undefined;
@@ -226,6 +244,7 @@ function ensureMetrics(item: TokenState): TokenMetrics {
   metrics.exactTradeCount ??= 0; metrics.estimatedTradeCount ??= 0; metrics.processedFeeSignatures ??= []; metrics.processedTradeSignatures ??= [];
   metrics.networkFeesLamports ??= null; metrics.networkFeeTransactions ??= 0; metrics.venueTradeFeesQuote ??= null; metrics.venueTradeFeesBase ??= null; metrics.inputTransferFeesQuote ??= null; metrics.outputTransferFeesQuote ??= null; metrics.inputTransferFeesBase ??= null; metrics.outputTransferFeesBase ??= null; metrics.buyPriceImpactSamples ??= []; metrics.sellPriceImpactSamples ??= []; metrics.estimatedPriorityFeeLamports ??= null; metrics.baseSignatureFeeLamports ??= null; metrics.lastFeePayer ??= null; metrics.walletNetworkFeesLamports ??= {}; metrics.protocolFeesQuote ??= null; metrics.platformFeesQuote ??= null; metrics.creatorFeesQuote ??= null; metrics.creatorFeesBase ??= null; metrics.tradeFeesQuote ??= null; metrics.tradeFeesBase ??= null; metrics.shareFeesQuote ??= null;
   metrics.lpFeesQuote ??= null; metrics.cashbackFeesQuote ??= null; metrics.buybackFeesQuote ??= null;
+  metrics.recentTradeSignals ??= []; metrics.lastRealQuoteReserveUsd ??= null;
   metrics.snapshotsRecorded ??= [];
   metrics.timeToTargetsSeconds ??= { "1.2x": null, "1.5x": null, "1.7x": null, "2x": null };
   return metrics;
