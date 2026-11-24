@@ -144,7 +144,7 @@ type TokenState = {
   mintAuthority?: string | null; freezeAuthority?: string | null; mintInitialized?: boolean | null; mintMetadataParsed?: boolean;
   tokenProgramOwner?: string | null; tokenExtensions?: Array<{ extension: string; state?: unknown }> | null;
   discoveryStatus?: "pending" | "eligible" | "rejected" | "expired"; discoveryReasons?: string[]; discoveryLastCheckedAt?: number; detailedCaptureStarted?: boolean;
-  fdvUsdAtScreen?: number | null; liquidityEvidenceKind?: "bonding_curve" | "locked_lp" | null;
+  fdvUsdAtScreen?: number | null; liquidityEvidenceKind?: "bonding_curve" | "locked_lp" | "burned_lp" | null;
   paperPosition?: PaperPosition | null; paperLastDecisionAt?: number;
   metrics?: TokenMetrics;
 };
