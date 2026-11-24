@@ -4,26 +4,28 @@ This repository contains the first-stage **research data collector**. It does no
 
 ## What it currently does
 
-- Watches the Pump program for likely create instructions.
+- Watches Pump.fun and the Raydium LaunchLab program used by StonkFun.
 - Fetches confirmed launch transactions through Helius.
-- Identifies Pump `create` / `create_v2` transactions from Pump program logs and takes the mint from the first account in the official Pump instruction layout; verifies the account is owned by SPL Token or Token-2022. It does not infer a launch mint from token-balance deltas.
+- Identifies Pump `create` / `create_v2` transactions using exact instruction discriminators and the official Pump account order; verifies the mint is owned by SPL Token or Token-2022. It does not infer a launch mint from token-balance deltas.
+- Identifies StonkFun LaunchLab `initialize`, `initialize_v2` and `initialize_with_token_2022` instructions by discriminator, LaunchLab program ID and known StonkFun platform-config accounts; reads base mint, quote mint and pool address from the documented account positions.
 - Creates one folder per mint: `data/tokens/<MINT>/events.jsonl`.
 - Captures transactions mentioning that mint for up to the configured first 10 minutes.
 - Stores the launch transaction fee payer separately. Creator identity is left null until decoded from authoritative launch-event data; fee payer is not silently labelled as creator.
-- Persists state and a remote Hugging Face checkpoint, restores active token event files, and saves a Pump-program signature cursor. On later runs it reconciles missed program transactions in bounded pages and saves its page cursor so reconciliation can resume.
-- Rotates transaction-fetch requests across up to three Helius API keys.
+- Persists state and a remote Hugging Face checkpoint, restores active token event files, and saves Pump and LaunchLab signature cursors. On later runs it reconciles missed program transactions in bounded pages and saves page cursors so reconciliation can resume.
+- Serializes parsed-transaction fetches across up to three Helius API keys, deduplicates repeated signatures and applies exponential backoff on rate limits.
 
 ## Market, price and trading metrics (schema version 3)
 
-For each newly detected Pump mint, the collector now attempts to store the mint supply and records derived trade observations and timed market snapshots alongside the raw transaction evidence.
+For each newly detected Pump or StonkFun mint, the collector attempts to store the mint supply and records venue-specific state, derived trade observations and timed snapshots alongside raw transaction evidence.
 
 Current derived fields include:
 - Pump bonding-curve spot price in its actual quote asset: SOL, USDC, USDT, or another SPL mint. Quote mint decimals are read from chain; the quote price and quote-denominated reserves are retained even when a reliable USD conversion is unavailable.
+- StonkFun LaunchLab quote mint, platform config, pool address and raw pool-account snapshots. StonkFun trade prices currently use signer-only owner-balance deltas and are explicitly low confidence until LaunchLab pool-state and TradeEvent decoding is completed.
 - USD conversion is provided for SOL using the SOL/USD reference and for USDC/USDT using an explicitly approximate $1 reference. Unknown custom quote assets are not falsely priced in USD.
 - FDV-style market capitalization in quote units and USD where conversion is supported (bonding-curve spot price multiplied by on-chain total supply; this is not circulating market cap).
 - Timed snapshots at 5, 10, 15, 30, 60, 120, 300 and 600 seconds after launch.
 - Low-confidence owner-balance-delta buy/sell observations, quote/SOL/USD estimated volume, largest observed buy/sell amounts and unique observed buyers/sellers. These are not exact transaction-level trade counts or fills.
-- Highest/lowest observed USD price, maximum observed drawdown, largest observed buy/sell size, and time to 1.2x, 1.5x, 1.7x and 2x from the first observed USD price.
+- Highest/lowest observed USD price where available, quote-denominated maximum drawdown, largest observed buy/sell size, and time to 1.2x, 1.5x, 1.7x and 2x from the first observed quote price.
 - Bonding-curve virtual and real SOL/token reserves, completion status, quote mint, and creator field when present in the curve account.
 - Raw transaction balances, token balances, logs, signatures, slot, network fee in lamports, signature count, estimated base-signature fee, estimated priority fee (network fee minus base signature fee), compute units consumed, loaded addresses and inner instructions remain available for re-analysis.
 - Extended Pump bonding-curve account fields include creator fee basis points, Holder Rewards flag, creator/protocol fee balances accrued on the curve, Mayhem/Cashback flags and quote mint when present. Accrued fee balances are denominated in the quote asset and are direct account-state observations, not estimates.
@@ -31,7 +33,7 @@ Current derived fields include:
 
 **Important data-quality warning:** the Pump pre-graduation spot price is decoded from bonding-curve virtual reserves in the curve's actual quote asset. It is a curve spot price, not a guaranteed execution quote; fees and slippage affect realized fills. The separate owner-balance-delta trade estimate is low confidence because rent, unrelated SOL transfers, wrapped-SOL routing and multi-leg transactions can distort it. USD conversion uses a public SOL/USD reference endpoint and may be null when unavailable. Market cap is FDV-style (price × total supply), not circulating market cap, and it is not liquidity. Custom quote-mint curves are retained in their quote units; only SOL, USDC and USDT currently receive a USD conversion. This does not yet calculate a trusted USD oracle price for arbitrary custom quote tokens.
 
-The collector does not yet calculate PumpSwap pool reserves/LP depth after graduation, executable slippage/exit capacity, creator/insider wallet labels, holder concentration excluding pool accounts, or venue-normalized prices. Those require venue-specific instruction and account decoders. Do not use the low-confidence estimated prices as live execution quotes or treat these metrics as verified until compared with known transactions and venue quotes.
+The collector does not yet decode PumpSwap/Raydium CPMM pool reserves and LP depth after graduation, LaunchLab pool-state fields or exact LaunchLab/PumpSwap TradeEvents, executable slippage/exit capacity, creator/insider wallet labels, holder concentration excluding pool accounts, or venue-normalized prices. StonkFun pool bytes are retained raw; they are not yet decoded into reserve metrics. Do not use the low-confidence estimated prices as live execution quotes or treat these metrics as verified until compared with known transactions and venue quotes.
 
 ## Important limitations of this first cut
 
