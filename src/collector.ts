@@ -205,6 +205,11 @@ async function processCurveState(item: TokenState, data: Buffer, slot: number) {
     totalSupply: supply, tokenDecimals: decimals, priceQuote, priceSol, priceUsd, quoteUsd, solUsd,
     marketCapQuote: marketCap(priceQuote, supply), marketCapSol: isSol ? marketCap(priceQuote, supply) : null,
     marketCapUsd: marketCap(priceUsd, supply), pricingMethod: "pump_bonding_curve_virtual_reserves",
+    // Published bonding-curve schedule: 0.95% protocol + 0.30% creator = 1.25%.
+    // Custom-pair Holder Rewards can override the creator component; exact event values take precedence.
+    estimatedProtocolFeeBps: 95, estimatedCreatorFeeBps: 30, estimatedTotalCurveFeeBps: 125,
+    feeRateSource: "published_pump_bonding_curve_schedule", feeIsEstimateNotExecution: true,
+    creatorFeeMayBeOverriddenByHolderRewards: true,
     realTokenReservesUi: realToken, maxDrawdownPct: metrics.maxDrawdownPct,
     timeToTargetsSeconds: metrics.timeToTargetsSeconds
   });
