@@ -129,8 +129,13 @@ for (const sample of samples) {
   let signatures = [];
   let pages = 0;
   let oldestSeen = null;
-  let candidate = null;
-  while (pages < 10) {
+  let launchMatch = null;
+  let launchSignature = null;
+  let launchBlockTime = null;
+  let checkedSignatures = 0;
+  let apiCreateTransaction = null;
+
+  while (pages < 10 && !launchMatch) {
     const page = await rpc("getSignaturesForAddress", [
       sample.mint,
       { limit: 1000, commitment: "confirmed", ...(before ? { before } : {}) }
@@ -140,39 +145,43 @@ for (const sample of samples) {
     signatures = page;
     const oldest = page.at(-1);
     oldestSeen = oldest?.blockTime ?? oldestSeen;
-    const inWindow = page.filter(row =>
-      Number.isSafeInteger(row.blockTime) &&
-      Math.abs(row.blockTime - expectedCreateAt) <= 30
-    );
-    if (inWindow.length) {
-      candidate = inWindow.reduce((best, row) =>
-        Math.abs(row.blockTime - expectedCreateAt) < Math.abs(best.blockTime - expectedCreateAt) ? row : best
+
+    for (const row of page) {
+      if (!row.signature) continue;
+      const tx = await rpc("getTransaction", [
+        row.signature,
+        { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+      ]);
+      checkedSignatures++;
+      if (!tx?.meta || !tx?.transaction) continue;
+      const decoded = decodeStonkLaunches(transactionInstructions(tx));
+      const match = decoded.find(item =>
+        item.mint === sample.mint &&
+        item.platformConfig === sample.platformConfig
       );
-      break;
+      if (match) {
+        launchMatch = match;
+        launchSignature = row.signature;
+        launchBlockTime = row.blockTime;
+        break;
+      }
+      if (row.blockTime === expectedCreateAt) apiCreateTransaction = {
+        signature: row.signature,
+        blockTime: row.blockTime,
+        programInstructions: transactionInstructions(tx)
+          .filter(ix => ix.programId === LAUNCHLAB)
+          .map(ix => ({
+            discriminator: [...decodeBase58(ix.data).slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join(""),
+            accounts: ix.accounts.slice(0, 10)
+          }))
+      };
     }
-    if (!oldest?.signature || !Number.isSafeInteger(oldest.blockTime) || oldest.blockTime <= expectedCreateAt + 30) break;
+    if (launchMatch) break;
+    if (!oldest?.signature || !Number.isSafeInteger(oldest.blockTime) || oldest.blockTime < expectedCreateAt - 86_400) break;
     before = oldest.signature;
   }
 
-  const transaction = candidate?.signature
-    ? await rpc("getTransaction", [
-        candidate.signature,
-        { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-      ])
-    : null;
-  const normalizedInstructions = transaction ? transactionInstructions(transaction) : [];
-  const decoded = transaction ? decodeStonkLaunches(normalizedInstructions) : [];
-  const programInstructionSummary = normalizedInstructions
-    .filter(ix => ix.programId === LAUNCHLAB)
-    .map(ix => {
-      let discriminator = null;
-      try { discriminator = [...decodeBase58(ix.data).slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join(""); } catch {}
-      return { discriminator, dataPrefix: typeof ix.data === "string" ? ix.data.slice(0, 24) : null, accountsLength: ix.accounts.length, accounts: ix.accounts.slice(0, 10) };
-    });
-  const match = decoded.find(item =>
-    item.mint === sample.mint &&
-    item.platformConfig === sample.platformConfig
-  ) ?? null;
+  const exactMintPlatformMatch = Boolean(launchMatch);
 
   results.push({
     label: sample.label,
@@ -182,16 +191,15 @@ for (const sample of samples) {
     expectedCreateAtUtc: new Date(sample.createAtMs).toISOString(),
     signaturePages: pages,
     signaturesOnLastPage: signatures.length,
+    checkedSignatures,
     oldestSeenUtc: Number.isSafeInteger(oldestSeen) ? new Date(oldestSeen * 1000).toISOString() : null,
-    candidateSignature: candidate?.signature ?? null,
-    candidateBlockTimeUtc: Number.isSafeInteger(candidate?.blockTime) ? new Date(candidate.blockTime * 1000).toISOString() : null,
-    createAtDifferenceSeconds: Number.isSafeInteger(candidate?.blockTime) ? candidate.blockTime - expectedCreateAt : null,
-    transactionHydrated: Boolean(transaction?.meta && transaction?.transaction),
-    launchInstructionDecoded: decoded.length > 0,
-    exactMintPlatformMatch: Boolean(match),
-    apiPoolMatchesLaunchCurvePool: Boolean(match && sample.apiPool === match.pool),
-    decodedMatch: match,
-    programInstructionSummary
+    launchSignature,
+    launchBlockTimeUtc: Number.isSafeInteger(launchBlockTime) ? new Date(launchBlockTime * 1000).toISOString() : null,
+    launchVsApiCreateAtSeconds: Number.isSafeInteger(launchBlockTime) ? launchBlockTime - expectedCreateAt : null,
+    exactMintPlatformMatch,
+    apiPoolMatchesLaunchCurvePool: Boolean(launchMatch && sample.apiPool === launchMatch.pool),
+    decodedMatch: launchMatch,
+    apiCreateTransaction
   });
 }
 
