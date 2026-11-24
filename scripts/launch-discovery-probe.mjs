@@ -53,47 +53,53 @@ for (const probe of pumpProbes) results.push(summarize(await requestJson(probe.n
 
 const raydiumBase = "https://launch-mint-v1.raydium.io/get/list";
 const raydiumParams = "platformId=PlatformWhiteList&sort=new&size=100&mintType=default&includeNsfw=false";
+const targetStartMs = Date.parse("2026-11-01T00:00:00Z");
 let nextPageId = null;
+let raydiumReachedTargetStart = false;
 let raydiumPageCount = 0;
-for (let page = 1; page <= 40; page++) {
+for (let page = 1; page <= 60; page++) {
   const url = `${raydiumBase}?${raydiumParams}${nextPageId ? `&nextPageId=${encodeURIComponent(nextPageId)}` : ""}`;
   const response = await requestJson(`raydium_launchlab_new_page_${page}`, url);
   const summary = summarize(response);
   results.push(summary);
   const data = response.body?.data ?? {};
   const next = data?.nextPageId ?? null;
+  raydiumPageCount++;
+  const oldestOnPage = summary.last?.createdAt;
+  if (Number.isFinite(oldestOnPage) && oldestOnPage <= targetStartMs) {
+    raydiumReachedTargetStart = true;
+    break;
+  }
   if (!response.ok || response.body?.success !== true || !summary.rowCount || !next || next === nextPageId) break;
   nextPageId = next;
-  raydiumPageCount++;
 }
 
 const pumpHasRows = results.some(r => r.name.startsWith("pumpfun_") && r.ok && r.rowCount > 0 && r.first?.mint);
 const raydiumPages = results.filter(r => r.name.startsWith("raydium_launchlab_") && r.ok && r.rowCount > 0);
-const raydiumHasRows = raydiumPages.length > 0;
-const raydiumCursorObserved = raydiumPages.some(r => r.nextPageId);
 const raydiumDates = raydiumPages.flatMap(r => [r.first?.createdAt, r.last?.createdAt]).filter(Number.isFinite);
 
 const report = {
   generatedAt: new Date().toISOString(),
-  purpose: "Read-only launch-index pagination depth probe; no Helius calls and no dataset writes.",
+  purpose: "Read-only launch-index pagination and historical boundary probe; no Helius calls and no dataset writes.",
   historicalCollectionStarted: false,
   datasetWritten: false,
   pumpOffsetsTested: pumpOffsets,
   pumpSortOrdersTested: ["ASC", "DESC"],
-  raydiumPagesTested: raydiumPageCount + (raydiumPages.length ? 1 : 0),
+  raydiumPagesTested: raydiumPageCount,
   raydiumEarliestObservedCreateAt: raydiumDates.length ? Math.min(...raydiumDates) : null,
   raydiumLatestObservedCreateAt: raydiumDates.length ? Math.max(...raydiumDates) : null,
+  raydiumReachedNovember1Boundary: raydiumReachedTargetStart,
   checks: {
     pumpfunIndexReturnsRows: pumpHasRows,
-    raydiumLaunchLabIndexReturnsRows: raydiumHasRows,
-    raydiumCursorObserved: raydiumCursorObserved
+    raydiumLaunchLabIndexReturnsRows: raydiumPages.length > 0,
+    raydiumCursorObserved: raydiumPages.some(r => r.nextPageId)
   },
-  status: pumpHasRows && raydiumHasRows ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified",
+  status: pumpHasRows && raydiumPages.length ? "both_discovery_sources_return_rows" : "discovery_sources_not_both_verified",
   results
 };
 
-console.log("LAUNCH_DISCOVERY_DEPTH_REPORT");
+console.log("LAUNCH_DISCOVERY_BOUNDARY_REPORT");
 console.log(JSON.stringify(report, null, 2));
 await mkdir("launch-discovery-probe-output", { recursive: true });
 await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\n");
-if (!pumpHasRows || !raydiumHasRows) process.exitCode = 2;
+if (!pumpHasRows || !raydiumPages.length) process.exitCode = 2;
