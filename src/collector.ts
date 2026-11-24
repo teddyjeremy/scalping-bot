@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import path from "node:path";
 import { deriveTradeObservations, marketCap } from "./metrics.js";
 import { findPumpCreateInstructions } from "./pump-instructions.js";
-import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
+import { flushHuggingFaceUploads, markCollectorStateDirty, markMintDirty, markQualityManifestDirty, quarantineRemoteMintFile, restoreCollectorState, restoreQualityManifest, restoreTokenEvents } from "./hf-uploader.js";
 
 const PUMP_PROGRAM = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const TOKEN_PROGRAMS = new Set([
@@ -342,6 +342,17 @@ async function processTradeMetrics(item: TokenState, tx: ParsedTransactionWithMe
   await persistState();
 }
 
+async function migrateQuarantinedMint(mint: string) {
+  const entry = qualityManifest.quarantinedMints[mint];
+  if (!entry || entry.rawMovedToQuarantine === true) return;
+  const reason = String(entry.reason ?? "Failed strict launch verification.");
+  const moved = await quarantineRemoteMintFile(mint, reason);
+  if (moved) {
+    entry.rawMovedToQuarantine = true;
+    await persistQualityManifest();
+  }
+}
+
 async function persistQualityManifest() {
   await mkdir(path.dirname(qualityPath), { recursive: true });
   qualityManifest.generatedAt = Date.now();
@@ -599,6 +610,7 @@ async function loadState() {
       if (state.tokens[mint]) qualityManifest.quarantinedMints[mint] = { status: "excluded", reason: "Quote asset is not a newly launched Pump token.", rawPath: `raw/pumpfun/${mint}/events.jsonl`, retainedForAudit: true };
       delete state.tokens[mint];
     }
+    for (const mint of Object.keys(qualityManifest.quarantinedMints)) await migrateQuarantinedMint(mint);
     await persistQualityManifest();
   } catch (error) {
     console.error("Checkpoint is invalid; starting a clean state without deleting remote data:", String(error).slice(0, 160));
@@ -633,6 +645,7 @@ async function auditExistingLaunches() {
     }
   }
   if (changed) await persistState();
+  for (const mint of Object.keys(qualityManifest.quarantinedMints)) await migrateQuarantinedMint(mint);
   await persistQualityManifest();
 }
 
