@@ -219,6 +219,7 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
     dataQuality: { launchTransactionFetched: true, historicalMintAuthoritySnapshot: false, historicalHolderSnapshot: false, exactLaunchCurveReserves: false, launchTransactionTouchedBalanceSumIsNotTotalSupply: true }
   };
   await writeFile(file, JSON.stringify(payload) + "\n");
+  queueDirtyFile(file);
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
@@ -281,6 +282,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) throw new Error("Pump mint-authority address returned transactions but no Pump create instructions were decoded.");
     state.programs[program] = progress;
     await save();
+    await uploadDirtyFiles();
     pages++;
     console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
@@ -380,6 +382,7 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       const sourceId = createHash("sha256").update(address).digest("hex").slice(0, 16);
       const pageFile = path.join(directory, `source-${sourceId}-page-${String(source.pages + 1).padStart(6, "0")}.jsonl`);
       await writeFile(pageFile, lines.length ? lines.join("\n") + "\n" : "");
+      queueDirtyFile(pageFile);
       source.pages++;
       pagesThisRun++;
       if (!enhanced && (reachedLaunchBoundary || hydrated.length < 100)) source.complete = true;
@@ -390,6 +393,8 @@ async function collectMintTrades(record: Cursor["launches"][string]) {
       await save();
       // Rebuild after every raw page, even when the 10-minute capture is incomplete.
       await buildMintResearchSummary(record);
+      queueDirtyFile(launchRecordPath(record, ".summary.json"));
+      await uploadDirtyFiles();
       console.log(`Trade capture ${record.venue} ${record.mint}: source ${sourceId}, page ${source.pages}, events=${lines.length}, complete=${progress.complete}`);
     }
     progress.sources[address] = source;
