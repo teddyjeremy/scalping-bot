@@ -1,0 +1,46 @@
+name: Approved Solana dataset reset
+
+on:
+  push:
+    paths:
+      - ".github/workflows/reset-hf-dataset.yml"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  reset:
+    if: github.event.head_commit.message == 'Execute approved Hugging Face dataset reset'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reset Hugging Face dataset and initialize v3
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python -m pip install --upgrade huggingface_hub
+          python scripts/reset-hf-dataset.py
+      - name: Delete old GitHub workflow artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for id in $(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq '.artifacts[].id'); do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            echo "Deleted artifact $id"
+          done
+      - name: Delete old GitHub Actions caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for id in $(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/caches" --jq '.actions_caches[].id'); do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id"
+            echo "Deleted cache $id"
+          done
