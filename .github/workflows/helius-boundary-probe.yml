@@ -1,0 +1,41 @@
+name: Bounded November history boundary probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/helius-boundary-probe.mjs"
+      - ".github/workflows/helius-boundary-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  boundary-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+      HISTORY_BOUNDARY_UTC: "2026-11-01T00:00:00Z"
+      BOUNDARY_MAX_PAGES: "250"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Probe historical boundary using standard read-only RPC
+        run: node scripts/helius-boundary-probe.mjs
+      - name: Preserve probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: november-boundary-probe-report
+          path: boundary-probe-output/report.json
+          if-no-files-found: warn
+          retention-days: 14
