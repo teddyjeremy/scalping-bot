@@ -1,0 +1,33 @@
+name: Remove verified invalid dataset record
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/cleanup-invalid-dataset-records.py"
+      - ".github/workflows/cleanup-invalid-dataset-records.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hf-invalid-record-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ndeda/solana-scalping-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Hugging Face Hub client
+        run: python -m pip install "huggingface_hub>=0.27,<2"
+      - name: Verify and delete only the confirmed false-positive record
+        run: python scripts/cleanup-invalid-dataset-records.py
