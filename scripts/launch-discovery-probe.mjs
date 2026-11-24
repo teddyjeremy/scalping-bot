@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+
 const probes = [
   {
     name: "pumpfun_frontend_coins",
@@ -61,5 +63,7 @@ const report = {
 };
 console.log("LAUNCH_DISCOVERY_PROBE_REPORT");
 console.log(JSON.stringify(report, null, 2));
+await mkdir("launch-discovery-probe-output", { recursive: true });
+await writeFile("launch-discovery-probe-output/report.json", JSON.stringify(report, null, 2) + "\\n");
 if (results.every(result => result.ok && result.rowCount !== null)) process.exitCode = 0;
 else process.exitCode = 2;
