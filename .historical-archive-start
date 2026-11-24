@@ -1,1 +1,3 @@
 Corrected archive resume: refresh summaries after every raw page, stable source file IDs, completeness metadata, and Parquet exports. Preserve all cursors and continue 2026-11-01 through 2026-11-23.
+
+Final corrected pass: incremental RPC hydration logs, page-level summary refresh, stable source IDs, completeness audit, and Parquet tables.
