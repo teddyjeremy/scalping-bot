@@ -10,6 +10,7 @@ import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, typ
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
+const PUMP_MINT_AUTHORITY = PublicKey.findProgramAddressSync([Buffer.from("mint-authority")], new PublicKey(PUMP))[0].toBase58();
 const STONK_CONFIGS = new Set(["6BwHHDg3u1854jC8PDLXvR4spTcLNaoBxLJNGC4nTESt", "4E876qZTE9FJMrBzgVtBrSrzz2TLivB5Y5QXPjB4gZL7"]);
 const START = Math.floor(new Date(process.env.HISTORY_START ?? "2026-11-01T00:00:00Z").getTime() / 1000);
 const END = Math.floor(new Date(process.env.HISTORY_END ?? "2026-11-24T00:00:00Z").getTime() / 1000);
@@ -115,7 +116,7 @@ function asParsedTransaction(row: HeliusHistoryRow): ParsedTransactionWithMeta |
 }
 type TradeSourceCursor = { before?: string; paginationToken?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launches: {} };
 let saveQueue: Promise<void> = Promise.resolve();
@@ -185,11 +186,15 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   await writeFile(file, JSON.stringify(payload) + "\n");
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
-  const progress = state.programs[program] ?? { complete: false };
+  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
+  let progress = state.programs[program] ?? { complete: false };
+  if (progress.address !== queryAddress) {
+    progress = { complete: false, address: queryAddress };
+  }
   if (progress.complete) return;
   let pages = 0;
   while (pages < MAX_PAGES) {
-    const enhanced = await getHeliusHistoryPage(program, START, END, progress.paginationToken);
+    const enhanced = await getHeliusHistoryPage(queryAddress, START, END, progress.paginationToken);
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
     if (enhanced) {
       hydrated = await Promise.all(enhanced.data.map(async row => ({
@@ -199,7 +204,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       progress.paginationToken = enhanced.paginationToken ?? undefined;
       if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
     } else {
-      const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(program), { limit: PAGE_SIZE, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
+      const signatures = await rpc("getSignaturesForAddress", c => c.getSignaturesForAddress(new PublicKey(queryAddress), { limit: PAGE_SIZE, ...(progress.before ? { before: progress.before } : {}) }, "confirmed"));
       if (!signatures.length) { progress.complete = true; state.programs[program] = progress; await save(); break; }
       const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
       hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
@@ -227,7 +232,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     state.programs[program] = progress;
     await save();
     pages++;
-    console.log(`Historical ${venue}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
+    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
