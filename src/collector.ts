@@ -412,20 +412,29 @@ async function recordHolderDistributionSnapshot(item: TokenState, elapsedSeconds
   });
   const circulatingCandidates = holders.filter(holder => !holder.isPoolVault);
   const sorted = [...circulatingCandidates].sort((a, b) => b.amount - a.amount);
-  const topShare = (count: number) => sorted.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
-  const creatorHolding = item.creator ? sorted.filter(holder => holder.owner === item.creator).reduce((sum, holder) => sum + holder.sharePct, 0) : null;
-  const feePayerHolding = item.launchFeePayer ? sorted.filter(holder => holder.owner === item.launchFeePayer).reduce((sum, holder) => sum + holder.sharePct, 0) : null;
+  const ownerTotals = new Map<string, number>();
+  for (const holder of sorted) ownerTotals.set(holder.owner, (ownerTotals.get(holder.owner) ?? 0) + holder.amount);
+  const walletHolders = [...ownerTotals.entries()].map(([owner, amount]) => ({
+    owner, amount, sharePct: amount / item.supplyUi! * 100
+  })).sort((a, b) => b.amount - a.amount);
+  const walletShare = (count: number) => walletHolders.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
+  const accountShare = (count: number) => sorted.slice(0, count).reduce((sum, holder) => sum + holder.sharePct, 0);
+  const creatorHolding = item.creator ? ownerTotals.has(item.creator) ? ownerTotals.get(item.creator)! / item.supplyUi * 100 : 0 : null;
+  const feePayerHolding = item.launchFeePayer ? ownerTotals.has(item.launchFeePayer) ? ownerTotals.get(item.launchFeePayer)! / item.supplyUi * 100 : 0 : null;
   await appendTokenEvent(item.mint, {
     schemaVersion: 7, kind: "holder_distribution_snapshot", mint: item.mint, slot, elapsedSeconds, observedAt: Date.now(),
-    holderScope: "top_20_token_accounts_from_getTokenLargestAccounts",
+    holderScope: "top_20_token_accounts_from_getTokenLargestAccounts_aggregated_by_owner",
     holderCountReturned: holders.length, holderCountAfterPoolVaultExclusion: sorted.length,
+    uniqueWalletOwnersInTop20: walletHolders.length,
     excludedPoolVaultCount: holders.filter(holder => holder.isPoolVault).length,
-    largestHolderSharePct: sorted[0]?.sharePct ?? null, top5HolderSharePct: topShare(5),
-    top10HolderSharePct: topShare(10), top20HolderSharePct: topShare(20),
+    largestHolderSharePct: walletHolders[0]?.sharePct ?? null,
+    top5HolderSharePct: walletShare(5), top10HolderSharePct: walletShare(10), top20HolderSharePct: walletShare(20),
+    top5AccountSharePct: accountShare(5), top10AccountSharePct: accountShare(10), top20AccountSharePct: accountShare(20),
     creatorShareInTop20Pct: creatorHolding, launchFeePayerShareInTop20Pct: feePayerHolding,
+    wallets: walletHolders.map(holder => ({ ...holder, role: holder.owner === item.creator ? "creator" : holder.owner === item.launchFeePayer ? "launch_fee_payer" : "holder" })),
     holders: sorted.map(holder => ({ ...holder, role: holder.owner === item.creator ? "creator" : holder.owner === item.launchFeePayer ? "launch_fee_payer" : "holder" })),
     excludesKnownPoolVaults: true, concentrationIsTop20Only: true,
-    note: "Top token accounts only; owner balances outside the top 20 and off-token-account custody are not included."
+    note: "Top 20 token accounts only, aggregated by wallet owner for wallet concentration; accounts outside the top 20 and off-token-account custody are not included."
   });
   return true;
 }
