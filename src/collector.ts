@@ -107,7 +107,7 @@ type PumpCurveState = {
 function decodePumpCurve(data: Buffer): PumpCurveState | null {
   // Anchor account: discriminator + five u64 reserves/supply + bool + creator.
   if (data.length < 49) return null;
-  const zero = PublicKey.default.toBase58();
+  const zero = new PublicKey(Buffer.alloc(32)).toBase58();
   const creator = data.length >= 81 ? new PublicKey(data.subarray(49, 81)).toBase58() : null;
   // Current extended layout appends mayhem/cashback flags, then quote_mint.
   const quoteMint = data.length >= 115 ? new PublicKey(data.subarray(83, 115)).toBase58() : null;
@@ -208,7 +208,7 @@ async function recordDueSnapshots(item: TokenState, observedAt: number) {
       schemaVersion: 3, kind: "market_snapshot", mint: item.mint,
       elapsedSeconds: seconds, observedAt, priceSol, priceUsd,
       marketCapSol, marketCapUsd, totalSupply: supply,
-      priceChangePctFromFirstTrade: priceChangePct,
+      priceChangePctFromFirstObservedPrice: priceChangePct,
       tradeCount: metrics.tradeCount, buyCount: metrics.buyCount, sellCount: metrics.sellCount,
       volumeSol: metrics.volumeSol, volumeUsd: metrics.volumeUsd,
       maxDrawdownPct: metrics.maxDrawdownPct, timeToTargetsSeconds: metrics.timeToTargetsSeconds,
@@ -367,6 +367,11 @@ async function captureMint(item: TokenState) {
         );
       }
     }, "confirmed");
+    void connection.getAccountInfo(curveAddress, "confirmed").then(info => {
+      const current = state.tokens[mint];
+      if (info && current) return processCurveState(current, info.data, 0);
+      return undefined;
+    }).catch(error => console.warn("Initial bonding-curve read failed:", mint, String(error).slice(0, 120)));
     const timer = setInterval(() => {
       const item = state.tokens[mint];
       if (item) void recordDueSnapshots(item, Date.now()).catch(error => console.error("Snapshot error:", String(error)));
