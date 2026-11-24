@@ -53,7 +53,7 @@ def restore():
     if trades.exists():
         for venue_dir in [p for p in trades.iterdir() if p.is_dir()]:
             for mint_dir in list(venue_dir.iterdir()):
-                if not mint_dir.is_dir() or len(mint_dir.name) != 44:
+                if not mint_dir.is_dir() or len(mint_dir.name) == 2:
                     continue
                 shard = hashlib.sha256(mint_dir.name.encode()).hexdigest()[:2]
                 target_dir = venue_dir / shard
