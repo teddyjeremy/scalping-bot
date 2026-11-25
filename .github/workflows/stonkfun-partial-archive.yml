@@ -47,9 +47,6 @@ jobs:
         with:
           path: historical-data
           key: stonkfun-partial-archive-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            stonkfun-partial-archive-
-            historical-archive-
       - name: Validate secrets and date range
         shell: bash
         run: |
@@ -67,6 +64,46 @@ jobs:
           npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/historical-archive.ts
           python -m py_compile scripts/hf-dataset-v3-sync.py
           npm test
+      - name: DELETE ALL OLD HUGGING FACE DATASET FILES (clean rebuild)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'PY'
+          from huggingface_hub import HfApi
+          from huggingface_hub.hf_api import RepoFile
+          import os
+          repo = "ndeda/solana-scalping-data"
+          token = os.environ.get("HF_TOKEN")
+          if not token:
+              raise SystemExit("HF_TOKEN missing; refusing to continue")
+          api = HfApi(token=token)
+          files = [
+              item.path for item in api.list_repo_tree(
+                  repo_id=repo, repo_type="dataset", recursive=True
+              )
+              if isinstance(item, RepoFile)
+              and item.path not in {".gitattributes", "README.md"}
+          ]
+          print(f"Old dataset files to delete: {len(files)}")
+          for start in range(0, len(files), 100):
+              batch = files[start:start + 100]
+              api.delete_files(
+                  repo_id=repo, repo_type="dataset", paths=batch,
+                  commit_message=f"Clean rebuild: delete old data batch {start // 100 + 1}"
+              )
+              print(f"Deleted {min(start + 100, len(files))}/{len(files)}")
+          remaining = [
+              item.path for item in api.list_repo_tree(
+                  repo_id=repo, repo_type="dataset", recursive=True
+              )
+              if isinstance(item, RepoFile)
+              and item.path not in {".gitattributes", "README.md"}
+          ]
+          print(f"Remaining old data files: {len(remaining)}")
+          if remaining:
+              raise SystemExit(f"Cleanup verification failed: {remaining[:20]}")
+          print("CLEAN_REBUILD_DELETE_VERIFIED")
+          PY
       - name: Restore previous archive and checkpoint from Hugging Face
         run: python scripts/hf-dataset-v3-sync.py restore
       - name: Verify Hugging Face dataset write access and clean up test file
