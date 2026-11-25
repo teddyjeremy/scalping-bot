@@ -513,9 +513,9 @@ async function scanStonkFunIndex() {
 
       const timestamps = page.rows.map(row => Number(row.createAt));
       const validTimes = timestamps.filter(Number.isFinite);
-      const pageNewest = validTimes.length ? Math.max(...validTimes) : null;
-      const pageOldest = validTimes.length ? Math.min(...validTimes) : null;
-      console.log(JSON.stringify({ event: "launchlab_index_page_received", platformConfig, page: progress.pages + 1, rows: page.rows.length, newestCreateAt: pageNewest == null ? null : new Date(pageNewest).toISOString(), oldestCreateAt: pageOldest == null ? null : new Date(pageOldest).toISOString(), rowsInRequestedWindow: validTimes.filter(value => value >= START * 1000 && value < END * 1000).length, nextPageIdPresent: Boolean(page.nextPageId), requestedStartUtc: new Date(START * 1000).toISOString(), requestedEndUtcExclusive: new Date(END * 1000).toISOString() }));
+      const pageNewestDiagnostic = validTimes.length ? Math.max(...validTimes) : null;
+      const pageOldestDiagnostic = validTimes.length ? Math.min(...validTimes) : null;
+      console.log(JSON.stringify({ event: "launchlab_index_page_received", platformConfig, page: progress.pages + 1, rows: page.rows.length, newestCreateAt: pageNewestDiagnostic == null ? null : new Date(pageNewestDiagnostic).toISOString(), oldestCreateAt: pageOldestDiagnostic == null ? null : new Date(pageOldestDiagnostic).toISOString(), rowsInRequestedWindow: validTimes.filter(value => value >= START * 1000 && value < END * 1000).length, nextPageIdPresent: Boolean(page.nextPageId), requestedStartUtc: new Date(START * 1000).toISOString(), requestedEndUtcExclusive: new Date(END * 1000).toISOString() }));
       if (timestamps.some(value => !Number.isFinite(value))) {
         throw new Error(`StonkFun LaunchLab index page contains a row without createAt for config ${platformConfig}.`);
       }
