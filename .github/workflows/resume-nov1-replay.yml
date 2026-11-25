@@ -4,7 +4,6 @@ name: Resume November 1 replay collection
 on:
   push:
     paths:
-      - ".github/workflows/resume-nov1-replay.yml"
       - "scripts/hf-dataset-v3-sync.py"
       - "scripts/shrine-replay-archive.py"
   workflow_dispatch:
@@ -36,12 +35,13 @@ jobs:
       - name: Validate publisher and collector syntax
         run: |
           python -m py_compile scripts/hf-dataset-v3-sync.py scripts/shrine-replay-archive.py
-      - name: Verify Hugging Face write/read access
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: python scripts/hf-dataset-v3-sync.py write-test
       - name: Restore existing dataset and resumable checkpoint
         run: python scripts/hf-dataset-v3-sync.py restore
+      - name: Allow Hugging Face free commit quota to reset
+        run: |
+          echo "Previous attempts exhausted the 128-commit/hour quota."
+          echo "Waiting 60 minutes before the first real dataset publication."
+          sleep 3600
       - name: Resume all remaining November 1 UTC replay hours
         timeout-minutes: 330
         shell: bash
