@@ -51,3 +51,25 @@ Start with descriptive analysis, then test deterministic rules on completed samp
 
 ## Updating this ledger
 For every coin, add or update one row in `nov1_coin_readiness.csv` after verifying the actual Hugging Face files. A coin enters the research-ready list only after its summary, source cursors, transaction pages, and 60 ten-second buckets have been checked. Keep a separate count of PARTIAL, METADATA_ONLY, and UNVERIFIED coins.
+
+
+## First verified November 1 transaction-complete cohort (partial ledger scan)
+A scan of the first 60 Pump.fun ledger entries in hash-path order found **10 coins** whose saved ledger reports all of: 600-second requested window, `transactionHistoryComplete=true`, replay source complete, and `gapAccountingComplete=true`. This is a transaction-capture cohort, **not** a fully research-ready/safety-verified cohort. All 10 currently have `researchReady=false` because additional historical price, holder, liquidity, or failed-transaction evidence is missing. The scan covered only the first 60 entries returned, not the entire November 1 dataset; do not present 10 as the global total.
+
+The strongest first analysis candidate is `FUzY9vpsEesiyzrcoXGN8hxuvwpYZsqq8WmQtsggpump`:
+- 1,776 trade events: 1,003 buys and 773 sells.
+- 526 unique buyers, 449 unique sellers, 528 unique traders.
+- 384.9500 SOL buy volume versus 349.3202 SOL sell volume.
+- 2 creator sell events; top buyer share of buy volume 2.30%.
+- Quote-per-token price path first to last rises from approximately 3.0168e-8 to 1.3379e-7; reported max drawdown is 65.64%. This is **not USD pricing**, and must not be interpreted as net executable return.
+- 59/60 ten-second buckets have event observations; bucket 47 is empty, and the replay marks gap accounting complete.
+- Network fee fields are unavailable (zero transactions with fee data), so net-of-fee returns cannot yet be established.
+
+Other transaction-complete samples found in the same 60-entry scan: `Hq5YKeDcrUNip7bMnhSgo3LSzY6LEkoMbHi6S1U2pump` (193 trades, 8 observed buckets); `Fz3QgULhNFBN4yfZ5ozRWQuHJdwGPiyMrZsWfSkvpump` (107 trades, 27 buckets); `Eymttx3BP4MYAtyPwDBXY193qjbtCd25B2Q3VSWEpump` (73 trades, 6 buckets); `HGVEUYmYKbtnnFLCpxvFnevqc96xftZHomKCqrQUpump` (66 trades, 5 buckets); `ERMqP5kkXmMw7TKTMCyBk9x15bBf1m7ZdBE2M2CSpump` (87 trades, 8 buckets); `Hs9iix6vdaCBLh7iPErjiES5ttgfA979e1KYpDAJpump` (18 trades, 5 buckets); `HYexqtrk6czSDMMNw8mGsfffwD7hu1ZAzk9nCp47pump` (13 trades, 4 buckets); `HenNJC3ji7wVDRzHNg19A5HE6SAbms3auxWxvtJrpump` (7 trades, 2 buckets); and `Hm29qFXm5pSFiWGMYLHs5Bkwz6RrQyBH1wmLsMAFxSeH` (zero trade events; keep as a no-trade/control sample).
+
+### Immediate first rule experiments
+1. For FUz, build time-series features by second/bucket: buy/sell quote volume, buy/sell counts, unique buyer growth, buy/sell imbalance, price return, rolling high-to-low drawdown, and reserve movement.
+2. Compare candidate entries at +30s to +300s against subsequent quote-price path, while labeling price data as quote-denominated and excluding fee-adjusted profitability claims.
+3. Test whether early buyer acceleration and concentration predict later continuation versus sharp adverse excursion. Do not assume wallet heuristics identify bots.
+4. Keep sparse coins and the zero-trade coin in the dataset as distinct activity cohorts; do not discard them as failed collection.
+5. As collection updates, rerun the full ledger scan and append newly verified coins; the current cohort count is a lower bound from a limited scan.
