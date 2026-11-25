@@ -34,8 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
- if s.get("collectorVersion") != 3:
-  s["replayHours"]={}; s["collectorVersion"]=3
+ if s.get("collectorVersion") != 4:
+  s["replayHours"]={}; s["collectorVersion"]=4
  return s
 
 def save(s):
@@ -200,8 +200,28 @@ def publish(changed):
   try: p=p.relative_to(ROOT)
   except ValueError: pass
   normalised.append(p.as_posix())
- cmd=[sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*sorted(normalised)]
- subprocess.run(cmd,check=True)
+ grouped=defaultdict(list)
+ for path in sorted(set(normalised)):
+  parts=Path(path).parts
+  if len(parts)>=4 and parts[0]=="launches":
+   venue=parts[1]; filename=parts[3]
+   mint=filename.removesuffix(".screening.json").removesuffix(".summary.json").removesuffix(".json")
+  elif len(parts)>=5 and parts[0]=="trades":
+   venue,mint=parts[1],parts[3]
+  else:
+   continue
+  grouped[(venue,mint)].append(path)
+ if not grouped:
+  subprocess.run([sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch"],check=True)
+  return
+ keys=sorted(grouped)
+ for offset in range(0,len(keys),50):
+  batch=keys[offset:offset+50]
+  batch_paths=[p for key in batch for p in grouped[key]]
+  env=os.environ.copy()
+  if offset+50<len(keys): env["SKIP_CHECKPOINT_UPLOAD"]="1"
+  else: env.pop("SKIP_CHECKPOINT_UPLOAD",None)
+  subprocess.run([sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*batch_paths],check=True,env=env)
 
 def download(hour):
  url=f"{BASE}/{hour}.jsonl.zst"
