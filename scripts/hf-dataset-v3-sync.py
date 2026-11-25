@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Idempotent per-coin publisher/restorer for the v3 Solana dataset."""
+# Automatic workflows publish in hourly batches; temporary preflight commits are disabled.
 import hashlib
 import json
 import os
