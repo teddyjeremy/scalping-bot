@@ -194,7 +194,13 @@ def summarize(s,r):
  return complete
 
 def publish(changed):
- cmd=[sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*sorted(changed)]
+ normalised=[]
+ for raw in changed:
+  p=Path(raw)
+  try: p=p.relative_to(ROOT)
+  except ValueError: pass
+  normalised.append(p.as_posix())
+ cmd=[sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*sorted(normalised)]
  subprocess.run(cmd,check=True)
 
 def download(hour):
@@ -244,6 +250,11 @@ def process_hour(hour,s):
        s["launches"][mint]=r; persist_launch(r,e); ld,_=paths(r)
        changed.update([ (ld/f"{mint}.json").as_posix(),(ld/f"{mint}.screening.json").as_posix() ])
        counts["launches"]+=1
+      else:
+       ld,_=paths(old)
+       if not (ld/f"{mint}.json").exists():
+        persist_launch(old,e)
+        changed.update([(ld/f"{mint}.json").as_posix(),(ld/f"{mint}.screening.json").as_posix()])
     group.append(e)
    flush()
   s["replayHours"][hour]={"complete":True,"sha256":digest,**counts}
