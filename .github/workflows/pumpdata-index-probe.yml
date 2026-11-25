@@ -2,10 +2,6 @@ name: PumpData free launch index probe
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "scripts/pumpdata-index-probe.mjs"
-      - ".github/workflows/pumpdata-index-probe.yml"
 
 permissions:
   contents: read
