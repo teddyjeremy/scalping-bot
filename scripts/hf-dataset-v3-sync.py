@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -45,26 +46,44 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
     if not STAGED:
         return
     staged = dict(STAGED)
-    operations = [
-        CommitOperationAdd(path_in_repo=path, path_or_fileobj=BytesIO(data))
-        for path, data in sorted(staged.items())
-    ]
-    API.create_commit(
-        repo_id=REPO_ID,
-        repo_type="dataset",
-        operations=operations,
-        commit_message=message,
-    )
-    snapshot = Path(snapshot_download(
-        repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
-        allow_patterns=list(staged.keys()), force_download=True, max_workers=16,
-    ))
-    for path, expected_data in staged.items():
-        downloaded_path = snapshot / path
-        if not downloaded_path.is_file():
-            raise RuntimeError(f"Remote readback file missing after commit: {path}")
-        if digest(downloaded_path.read_bytes()) != digest(expected_data):
-            raise RuntimeError(f"Remote readback hash mismatch for {path}")
+    def readback_verified() -> bool:
+        try:
+            snapshot = Path(snapshot_download(
+                repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
+                allow_patterns=list(staged.keys()), force_download=True, max_workers=8,
+            ))
+            for path, expected_data in staged.items():
+                downloaded_path = snapshot / path
+                if not downloaded_path.is_file() or digest(downloaded_path.read_bytes()) != digest(expected_data):
+                    return False
+            return True
+        except Exception:
+            return False
+
+    committed = False
+    for attempt in range(3):
+        operations = [
+            CommitOperationAdd(path_in_repo=path, path_or_fileobj=BytesIO(data))
+            for path, data in sorted(staged.items())
+        ]
+        try:
+            API.create_commit(
+                repo_id=REPO_ID,
+                repo_type="dataset",
+                operations=operations,
+                commit_message=message,
+                num_threads=1,
+            )
+        except Exception as exc:
+            print(f"Hub upload attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
+        if readback_verified():
+            committed = True
+            break
+        if attempt < 2:
+            time.sleep(2 ** (attempt + 1))
+    if not committed:
+        raise RuntimeError("Hub upload did not pass SHA-256 readback after three serial attempts.")
+    for path in staged:
         STAGED.pop(path, None)
     print(f"Committed and SHA-256 verified {len(staged)} dataset files in one Hub commit.")
 

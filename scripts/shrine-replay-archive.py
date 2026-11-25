@@ -34,8 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
- if s.get("collectorVersion") != 6:
-  s["replayHours"]={}; s["collectorVersion"]=6
+ if s.get("collectorVersion") != 7:
+  s["replayHours"]={}; s["collectorVersion"]=7
  return s
 
 def save(s):
