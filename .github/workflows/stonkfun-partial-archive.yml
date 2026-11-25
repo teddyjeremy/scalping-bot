@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      HF_TOKEN: \${{ secrets.HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HISTORY_START: "2026-11-01T00:00:00Z"
       HISTORY_END: "2026-11-02T00:00:00Z"
       DATA_DIR: ./historical-data
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: historical-data
-          key: solana-free-replay-\${{ github.run_id }}-\${{ github.run_attempt }}
+          key: solana-free-replay-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Validate Hugging Face secret
         shell: bash
         run: |
@@ -52,9 +52,24 @@ jobs:
           python -m py_compile scripts/shrine-replay-archive.py scripts/hf-dataset-v3-sync.py
       - name: Restore existing dataset and resumable checkpoint
         run: python scripts/hf-dataset-v3-sync.py restore
+      - name: Verify public replay archive covers the requested hours
+        run: |
+          python - <<'PY'
+          import requests
+          base = "https://replay.shrine.trade/pump"
+          data = requests.get(base + "/index.json", timeout=30)
+          data.raise_for_status()
+          hours = set(data.json().get("hours", []))
+          required = [f"2026/11/01/{h:02d}" for h in range(24)] + ["2026/11/02/00"]
+          missing = [hour for hour in required if hour not in hours]
+          print(f"Required replay hours: {len(required)}; available: {len(required)-len(missing)}")
+          if missing:
+              raise SystemExit(f"Replay archive is missing required hours: {missing[:10]}")
+          print("REPLAY_SOURCE_COVERAGE_VERIFIED")
+          PY
       - name: Verify Hugging Face write/read/delete access
         env:
-          GITHUB_RUN_ID: \${{ github.run_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: python scripts/hf-dataset-v3-sync.py write-test
       - name: Collect November 1 launches and first ten minutes from free hourly replay
         timeout-minutes: 50
@@ -66,7 +81,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: solana-free-replay-\${{ github.run_id }}
+          name: solana-free-replay-${{ github.run_id }}
           path: historical-data/
           if-no-files-found: warn
           retention-days: 30
