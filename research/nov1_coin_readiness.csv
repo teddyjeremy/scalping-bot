@@ -1,0 +1,2 @@
+mint,venue,launch_time_utc,window_seconds,observed_10s_buckets,trade_events,transaction_history_complete,research_ready,status,notes
+2CZCCzSET2s1njBHxszki3bh1MjLTdnpEoCtPoEYsheZ,pumpfun,2026-11-01T00:34:27Z,600,1,1,false,false,PARTIAL,"One observed buy at +3s; only bucket 0 observed; 59 buckets unaccounted; not eligible for rule fitting"
