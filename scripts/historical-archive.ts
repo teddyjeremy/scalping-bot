@@ -889,6 +889,10 @@ async function main() {
   }
   const stonkScan = await Promise.allSettled([scanStonkFunIndex()]);
   if (await finishBatch(stonkScan)) return;
+  if (process.env.HISTORY_DISCOVERY_ONLY === "true") {
+    console.log(`Launch indexing only. Detailed trade capture is paused until the historical initial-screen stage is enabled. Launches indexed: ${Object.keys(state.launches).length}.`);
+    return;
+  }
   const records = Object.values(state.launches);
   let nextRecord = 0;
   const workerCount = Math.min(1, records.length);
