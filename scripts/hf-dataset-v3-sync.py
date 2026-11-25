@@ -20,6 +20,9 @@ if not TOKEN:
 API = HfApi(token=TOKEN)
 ROOT = Path(os.environ.get("DATA_DIR", "./historical-data"))
 REMOTE_ROOT = "dataset_v3"
+START_DAY = os.environ.get("HISTORY_START", "2026-11-01T00:00:00Z")[:10]
+END_DAY = os.environ.get("HISTORY_END", "2026-11-24T00:00:00Z")[:10]
+CHECKPOINT_REMOTE = f"{REMOTE_ROOT}/control/checkpoints/{START_DAY}_{END_DAY}.json"
 
 
 def now():
@@ -87,12 +90,15 @@ def local_coin_files(venue: str, mint: str):
     shard, shard4 = mint_parts(venue, mint)
     launch = ROOT / "launches" / venue / shard / f"{mint}.json"
     summary = ROOT / "launches" / venue / shard / f"{mint}.summary.json"
+    screening = ROOT / "launches" / venue / shard / f"{mint}.screening.json"
     trades = ROOT / "trades" / venue / shard / mint
     files = []
     if launch.is_file():
         files.append(("launch", launch, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/launch.json"))
     if summary.is_file():
         files.append(("summary", summary, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/summary.json"))
+    if screening.is_file():
+        files.append(("screening", screening, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/screening.json"))
     if trades.is_dir():
         for file in sorted(trades.glob("*.jsonl")):
             files.append(("trade_page", file, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/transaction_pages/{file.name}"))
@@ -260,7 +266,7 @@ def publish_batch(paths):
         # launches/<venue>/<shard>/<mint>[.summary].json or trades/<venue>/<shard>/<mint>/<page>.jsonl
         if len(parts) >= 4 and parts[0] == "launches":
             venue, filename = parts[1], parts[3]
-            mint = filename.removesuffix(".summary.json").removesuffix(".json")
+            mint = filename.removesuffix(".screening.json").removesuffix(".summary.json").removesuffix(".json")
         elif len(parts) >= 5 and parts[0] == "trades":
             venue, mint = parts[1], parts[3]
         else:
@@ -270,7 +276,7 @@ def publish_batch(paths):
         publish_coin(venue, mint, changed)
     checkpoint = ROOT / "checkpoint.json"
     if checkpoint.is_file():
-        upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint")
+        upload_verified(CHECKPOINT_REMOTE, checkpoint.read_bytes(), f"Publish resumable collection checkpoint {START_DAY}..{END_DAY}")
     flush_staged()
     if not grouped:
         print("No coin files changed; checkpoint refreshed if present.")
@@ -293,7 +299,7 @@ def restore():
             return
         raise
     base = snapshot / REMOTE_ROOT
-    cp = base / "control" / "checkpoint.json"
+    cp = snapshot / CHECKPOINT_REMOTE
     if cp.is_file():
         shutil.copy2(cp, ROOT / "checkpoint.json")
     raw = base / "raw"
@@ -314,12 +320,15 @@ def restore():
                         mint = mint_dir.name
                         launch = mint_dir / "launch.json"
                         summary = mint_dir / "summary.json"
+                        screening = mint_dir / "screening.json"
                         local_launch_dir = ROOT / "launches" / venue / shard_dir.name
                         local_launch_dir.mkdir(parents=True, exist_ok=True)
                         if launch.is_file():
                             shutil.copy2(launch, local_launch_dir / f"{mint}.json")
                         if summary.is_file():
                             shutil.copy2(summary, local_launch_dir / f"{mint}.summary.json")
+                        if screening.is_file():
+                            shutil.copy2(screening, local_launch_dir / f"{mint}.screening.json")
                         page_dir = ROOT / "trades" / venue / shard_dir.name / mint
                         pages = mint_dir / "transaction_pages"
                         if pages.exists():
@@ -343,6 +352,9 @@ def restore():
                     continue
                 mint = ledger.get("mint")
                 if not mint:
+                    continue
+                launch_time = ledger.get("launch_time_utc")
+                if not launch_time or not (START_DAY <= launch_time[:10] < END_DAY):
                     continue
                 capture = ledger.get("capture") or {}
                 if not capture.get("transactionHistoryComplete"):

@@ -10,6 +10,7 @@ import { normalizeTransactionInstructions, type CompiledOrParsedInstruction } fr
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
 import { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "../src/wallet-analytics.js";
+import { evaluateInitialScreen, evaluateBehaviouralWindows, type EarlyTradeObservation } from "../src/initial-screen.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
@@ -171,7 +172,7 @@ const UPLOAD_BATCH_COINS = Math.max(1, Number(process.env.HISTORY_UPLOAD_BATCH_C
 function coinKeyFromLocalPath(file: string): string | null {
   const parts = file.split("/");
   if (parts[0] === "launches" && parts.length >= 4) {
-    return parts[1] + "/" + parts[3].replace(/\.summary\.json$|\.json$/, "");
+    return parts[1] + "/" + parts[3].replace(/\.screening\.json$|\.summary\.json$|\.json$/, "");
   }
   if (parts[0] === "trades" && parts.length >= 5) return parts[1] + "/" + parts[3];
   return null;
@@ -261,6 +262,10 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   };
   await writeFile(file, JSON.stringify(payload) + "\n");
   queueDirtyFile(file);
+  const screeningFile = launchRecordPath(record, ".screening.json");
+  const screening = evaluateInitialScreen({});
+  await writeFile(screeningFile, JSON.stringify({ ...screening, venue: record.venue, mint: record.mint, launchSignature: record.signature, launchTime: record.blockTime }, null, 2) + "\n");
+  queueDirtyFile(screeningFile);
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   const queryAddress = program;
@@ -660,6 +665,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
   const failedFees = new Map<string, number>();
   const buyers = new Set<string>();
   const sellers = new Set<string>();
+  const screeningEvents: EarlyTradeObservation[] = [];
   let buyEvents = 0;
   let sellEvents = 0;
   let transactionObservations = 0;
@@ -729,6 +735,10 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
       }
       if (typeof event.transactionFeeLamports === "number") tradeFees.set(signature, event.transactionFeeLamports);
       if (side === "buy") { buyEvents++; buyers.add(user); } else { sellEvents++; sellers.add(user); }
+      const screeningQuoteDecimals = typeof event.quoteDecimals === "number" ? event.quoteDecimals : null;
+      if (screeningQuoteDecimals != null && screeningQuoteDecimals >= 0 && screeningQuoteDecimals <= 18) {
+        screeningEvents.push({ secondsSinceLaunch: Number(event.secondsSinceLaunch), side, user, quoteAmount: Number(quoteRaw) / (10 ** screeningQuoteDecimals) });
+      }
       const tokenDecimals = typeof event.tokenDecimals === "number" ? event.tokenDecimals : null;
       const quoteDecimals = typeof event.quoteDecimals === "number" ? event.quoteDecimals : null;
       const tokenAmount = tokenDecimals == null ? null : Number(tokenRaw) / (10 ** tokenDecimals);
@@ -878,6 +888,19 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     }
   };
   await writeFile(launchRecordPath(record, ".summary.json"), JSON.stringify(summary, null, 2) + "\n");
+  const securityGate = evaluateInitialScreen({});
+  const behaviouralWindows = evaluateBehaviouralWindows(screeningEvents);
+  const screening = {
+    schemaVersion: 1, venue: record.venue, mint: record.mint, launchSignature: record.signature,
+    launchTime: record.blockTime, ruleVersion: "initial-security-gate-v1", evaluatedAt: new Date().toISOString(),
+    overallStatus: securityGate.status === "rejected" || behaviouralWindows.some(window => window.status === "rejected") ? "rejected" : "unverified",
+    security: securityGate, behaviouralWindows,
+    dataQuality: { tradeHistoryComplete: state.tradeCursors?.[record.mint]?.complete === true, quoteAmountsRequireKnownDecimals: true, historicalMintAuthorityVerified: false, tokenExtensionsHistoricallyAssessed: false, curveOrLpLockHistoricallyVerified: false },
+    note: "Behavioural windows are computed only from events at or before each window. Security remains unverified until historical state evidence is available."
+  };
+  const screeningFile = launchRecordPath(record, ".screening.json");
+  await writeFile(screeningFile, JSON.stringify(screening, null, 2) + "\n");
+  queueDirtyFile(screeningFile);
 }
 async function summaryNeedsRefresh(record: Cursor["launches"][string]): Promise<boolean> {
   const summaryPath = launchRecordPath(record, ".summary.json");
