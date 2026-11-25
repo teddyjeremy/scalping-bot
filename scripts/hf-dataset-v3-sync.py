@@ -12,6 +12,7 @@ from pathlib import Path
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download, snapshot_download
 
 STAGED: dict[str, bytes] = {}
+REMOTE_LEDGER_PATHS: set[str] | None = None
 
 REPO_ID = "ndeda/solana-scalping-data"
 TOKEN = os.environ.get("HF_TOKEN")
@@ -54,12 +55,15 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
         operations=operations,
         commit_message=message,
     )
+    snapshot = Path(snapshot_download(
+        repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
+        allow_patterns=list(staged.keys()), force_download=True, max_workers=16,
+    ))
     for path, expected_data in staged.items():
-        downloaded = Path(hf_hub_download(
-            repo_id=REPO_ID, filename=path, repo_type="dataset",
-            token=TOKEN, force_download=True,
-        )).read_bytes()
-        if digest(downloaded) != digest(expected_data):
+        downloaded_path = snapshot / path
+        if not downloaded_path.is_file():
+            raise RuntimeError(f"Remote readback file missing after commit: {path}")
+        if digest(downloaded_path.read_bytes()) != digest(expected_data):
             raise RuntimeError(f"Remote readback hash mismatch for {path}")
         STAGED.pop(path, None)
     print(f"Committed and SHA-256 verified {len(staged)} dataset files in one Hub commit.")
@@ -76,14 +80,24 @@ def ledger_remote(venue: str, mint: str) -> str:
 
 
 def load_remote_json(path: str):
-    try:
-        local = hf_hub_download(repo_id=REPO_ID, filename=path, repo_type="dataset", token=TOKEN, force_download=True)
-        return json.loads(Path(local).read_text(encoding="utf-8"))
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "404" in msg or "not found" in msg or "does not exist" in msg:
-            return None
-        raise
+    global REMOTE_LEDGER_PATHS
+    if REMOTE_LEDGER_PATHS is None:
+        try:
+            entries = API.list_repo_tree(
+                repo_id=REPO_ID, path_in_repo=f"{REMOTE_ROOT}/control/ledger",
+                repo_type="dataset", recursive=True,
+            )
+            REMOTE_LEDGER_PATHS = {entry.path for entry in entries if hasattr(entry, "path")}
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg or "does not exist" in msg:
+                REMOTE_LEDGER_PATHS = set()
+            else:
+                raise
+    if path not in REMOTE_LEDGER_PATHS:
+        return None
+    local = hf_hub_download(repo_id=REPO_ID, filename=path, repo_type="dataset", token=TOKEN, force_download=True)
+    return json.loads(Path(local).read_text(encoding="utf-8"))
 
 
 def local_coin_files(venue: str, mint: str):
@@ -275,7 +289,7 @@ def publish_batch(paths):
     for (venue, mint), changed in sorted(grouped.items()):
         publish_coin(venue, mint, changed)
     checkpoint = ROOT / "checkpoint.json"
-    if checkpoint.is_file():
+    if checkpoint.is_file() and os.environ.get("SKIP_CHECKPOINT_UPLOAD") != "1":
         upload_verified(CHECKPOINT_REMOTE, checkpoint.read_bytes(), f"Publish resumable collection checkpoint {START_DAY}..{END_DAY}")
     flush_staged()
     if not grouped:
