@@ -20,6 +20,7 @@ const ROOT = process.env.DATA_DIR ?? "./historical-data";
 const PAGE_SIZE = 100;
 const MAX_PAGES = Math.max(1, Number(process.env.HISTORY_MAX_PAGES_PER_RUN ?? 20));
 const MAX_LAUNCHLAB_PAGES = Math.max(1, Number(process.env.HISTORY_MAX_LAUNCHLAB_PAGES_PER_RUN ?? 5));
+const MAX_TRADE_COINS_PER_RUN = Math.max(0, Number(process.env.HISTORY_MAX_TRADE_COINS_PER_RUN ?? 0));
 const CAPTURE_SECONDS = 600;
 const MIN_RPC_INTERVAL_MS = Math.max(100, Number(process.env.HELIUS_RPC_MIN_INTERVAL_MS ?? 2000));
 const keys = [process.env.HELIUS_API_KEY_1, process.env.HELIUS_API_KEY_2, process.env.HELIUS_API_KEY_3].filter((v): v is string => Boolean(v));
@@ -880,17 +881,26 @@ async function main() {
   console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission. RPC pacing per key: ${MIN_RPC_INTERVAL_MS}ms.`);
   // One coordinator owns checkpoint and Hub commits. Transaction hydration still
   // fans out requests across the three independently paced Helius keys.
-  const pumpScan = await Promise.allSettled([scanProgram(PUMP, "pumpfun")]);
-  if (await finishBatch(pumpScan)) return;
+  if (process.env.HISTORY_SKIP_PUMP_INDEX === "true") {
+    console.log("Pump.fun launch index skipped by explicit partial-archive configuration.");
+  } else {
+    const pumpScan = await Promise.allSettled([scanProgram(PUMP, "pumpfun")]);
+    if (await finishBatch(pumpScan)) return;
+  }
   const stonkScan = await Promise.allSettled([scanStonkFunIndex()]);
   if (await finishBatch(stonkScan)) return;
   const records = Object.values(state.launches);
   let nextRecord = 0;
   const workerCount = Math.min(1, records.length);
+  let tradeCoinsStarted = 0;
   const tradeResults = await Promise.allSettled(Array.from({ length: workerCount }, async () => {
     while (nextRecord < records.length) {
       const record = records[nextRecord++];
-      if (!state.tradeCursors?.[record.mint]?.complete) await collectMintTrades(record);
+      if (!state.tradeCursors?.[record.mint]?.complete) {
+        if (MAX_TRADE_COINS_PER_RUN > 0 && tradeCoinsStarted >= MAX_TRADE_COINS_PER_RUN) break;
+        tradeCoinsStarted++;
+        await collectMintTrades(record);
+      }
       if (await summaryNeedsRefresh(record)) {
         await buildMintResearchSummary(record);
         queueDirtyFile(launchRecordPath(record, ".summary.json"));
