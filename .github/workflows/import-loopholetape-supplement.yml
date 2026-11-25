@@ -2,10 +2,6 @@ name: Import external Pump.fun research supplement
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "scripts/import-loopholetape-supplement.py"
-      - ".github/workflows/import-loopholetape-supplement.yml"
 
 permissions:
   contents: read
