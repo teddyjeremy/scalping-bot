@@ -1,0 +1,31 @@
+name: PumpData free launch index probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/pumpdata-index-probe.mjs"
+      - ".github/workflows/pumpdata-index-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe free daily launch index
+        run: node scripts/pumpdata-index-probe.mjs
+      - name: Preserve probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pumpdata-index-probe-${{ github.run_id }}
+          path: pumpdata-index-probe-output/report.json
+          if-no-files-found: warn
+          retention-days: 14
