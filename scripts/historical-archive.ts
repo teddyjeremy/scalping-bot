@@ -270,7 +270,9 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   // Pump create transactions include the protocol mint-authority PDA as an account.
   // The program id itself is not a reliable getSignaturesForAddress index target.
-  const queryAddress = program;
+  // Index Pump create transactions through the mint-authority PDA. Querying
+  // the Pump program id returns the full high-volume trade stream and wastes pages.
+  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
   let progress: Cursor["programs"][string] = state.programs[program] ?? { complete: false };
   if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
