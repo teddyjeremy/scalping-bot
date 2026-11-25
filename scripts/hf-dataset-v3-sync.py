@@ -46,43 +46,56 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
     if not STAGED:
         return
     staged = dict(STAGED)
-    def readback_verified() -> bool:
-        try:
-            snapshot = Path(snapshot_download(
-                repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
-                allow_patterns=list(staged.keys()), force_download=True, max_workers=8,
-            ))
-            for path, expected_data in staged.items():
-                downloaded_path = snapshot / path
-                if not downloaded_path.is_file() or digest(downloaded_path.read_bytes()) != digest(expected_data):
-                    return False
-            return True
-        except Exception:
-            return False
-
     committed = False
     for attempt in range(3):
         operations = [
             CommitOperationAdd(path_in_repo=path, path_or_fileobj=BytesIO(data))
             for path, data in sorted(staged.items())
         ]
+        revision = None
         try:
-            API.create_commit(
+            commit_info = API.create_commit(
                 repo_id=REPO_ID,
                 repo_type="dataset",
                 operations=operations,
                 commit_message=message,
                 num_threads=1,
             )
-        except Exception as exc:
-            print(f"Hub upload attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
-        if readback_verified():
+            revision = getattr(commit_info, "oid", None) or getattr(commit_info, "commit_id", None)
+            if not revision:
+                raise RuntimeError("Hugging Face commit response did not include an immutable revision.")
+            snapshot = Path(snapshot_download(
+                repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
+                revision=revision, allow_patterns=list(staged.keys()),
+                force_download=True, max_workers=4,
+            ))
+            mismatches = []
+            for path, expected_data in staged.items():
+                downloaded_path = snapshot / path
+                if not downloaded_path.is_file():
+                    mismatches.append(f"{path}: missing at committed revision {revision}")
+                    continue
+                actual_data = downloaded_path.read_bytes()
+                expected_hash, actual_hash = digest(expected_data), digest(actual_data)
+                if actual_hash != expected_hash:
+                    mismatches.append(
+                        f"{path}: expected sha256={expected_hash} bytes={len(expected_data)}, "
+                        f"readback sha256={actual_hash} bytes={len(actual_data)}"
+                    )
+            if mismatches:
+                print("Hugging Face readback mismatch details:")
+                for mismatch in mismatches[:20]:
+                    print(f"  {mismatch}")
+                raise RuntimeError(f"{len(mismatches)} staged file(s) failed immutable-revision readback.")
             committed = True
+            print(f"Verified staged files against immutable Hub revision {revision}.")
             break
+        except Exception as exc:
+            print(f"Hub upload/readback attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
         if attempt < 2:
             time.sleep(2 ** (attempt + 1))
     if not committed:
-        raise RuntimeError("Hub upload did not pass SHA-256 readback after three serial attempts.")
+        raise RuntimeError("Hub upload did not pass SHA-256 readback against its committed revision after three attempts.")
     for path in staged:
         STAGED.pop(path, None)
     print(f"Committed and SHA-256 verified {len(staged)} dataset files in one Hub commit.")
