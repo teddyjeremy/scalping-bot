@@ -268,7 +268,9 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   queueDirtyFile(screeningFile);
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
-  const queryAddress = program;
+  // Pump create transactions include the protocol mint-authority PDA as an account.
+  // The program id itself is not a reliable getSignaturesForAddress index target.
+  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY.toBase58() : program;
   let progress = state.programs[program] ?? { complete: false };
   if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
@@ -298,14 +300,16 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
       progress.before = signatures[signatures.length - 1].signature;
       const oldest = signatures[signatures.length - 1].blockTime;
+      if (oldest != null) progress.oldestScannedBlockTime = oldest;
+      if (signatures[0]?.blockTime != null && progress.latestScannedBlockTime == null) progress.latestScannedBlockTime = signatures[0].blockTime;
       if (oldest != null && oldest < START || signatures.length < PAGE_SIZE) progress.complete = true;
     }
     for (const { entry, tx } of hydrated) {
       if (entry.blockTime == null) continue;
       if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
+      const top = instructions(tx);
+      if (venue === "pumpfun") pumpProgramInstructionsSeen += top.filter(ix => ix.programId === PUMP).length;
       if (!tx.meta.err) {
-        const top = instructions(tx);
-        if (venue === "pumpfun") pumpProgramInstructionsSeen += top.filter(ix => ix.programId === PUMP).length;
         const launches = venue === "pumpfun"
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
           : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
@@ -328,7 +332,10 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         }
       }
     }
-    if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) console.warn(`No Pump create instruction was decoded on the first page; continuing pagination. Pump program instructions observed=${pumpProgramInstructionsSeen}.`);
+    if (venue === "pumpfun" && pages === 0 && pumpProgramInstructionsSeen === 0) {
+      throw new Error(`Pump mint-authority index returned ${hydrated.length} transactions but none contained a Pump program instruction. Refusing to burn the remaining page budget or mark this scan as useful. Index=${queryAddress}; inspect transaction normalization/provider responses.`);
+    }
+    if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) console.warn(`Pump program instructions were present but no create discriminator decoded on the first page; continuing pagination. Pump program instructions observed=${pumpProgramInstructionsSeen}.`);
     state.programs[program] = progress;
     await save();
     pages++;
@@ -337,7 +344,9 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       await uploadDirtyFiles();
       pagesSinceUpload = 0;
     }
-    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
+    const oldestProgress = progress.oldestScannedBlockTime ?? progress.lastCreateAt && Math.floor(progress.lastCreateAt / 1000);
+    const oldestIso = oldestProgress ? new Date(oldestProgress * 1000).toISOString() : "unknown";
+    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
@@ -501,7 +510,7 @@ async function scanStonkFunIndex() {
       state.launchLabIndexes![platformConfig] = progress;
       await save();
       await uploadDirtyFiles();
-      console.log(`StonkFun index config=${platformConfig} page=${progress.pages} launches=${Object.values(state.launches).filter(item => item.venue === "stonkfun").length} complete=${progress.complete}`);
+      console.log(`StonkFun index config=${platformConfig} page=${progress.pages} oldestScanned=${new Date(progress.lastCreateAt).toISOString()} launches=${Object.values(state.launches).filter(item => item.venue === "stonkfun").length} complete=${progress.complete}`);
     }
   }
 }
