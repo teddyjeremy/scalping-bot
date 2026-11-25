@@ -102,7 +102,20 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
             )
             break
         except Exception as exc:
-            print(f"Hub upload/readback attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            message = str(exc).lower()
+            if revision:
+                # The commit already exists. Never create a second commit just
+                # because its metadata verification endpoint is temporarily unavailable.
+                raise RuntimeError(
+                    f"Hub commit {revision} was created, but metadata verification failed: {exc}"
+                ) from exc
+            if status == 429 or "429 too many requests" in message or "rate limit" in message:
+                raise RuntimeError(
+                    "Hugging Face commit quota is exhausted; staged files are preserved locally. "
+                    "Wait for the quota reset before retrying publication."
+                ) from exc
+            print(f"Hub upload attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
         if attempt < 2:
             time.sleep(2 ** (attempt + 1))
     if not committed:
