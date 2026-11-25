@@ -64,38 +64,42 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
             revision = getattr(commit_info, "oid", None) or getattr(commit_info, "commit_id", None)
             if not revision:
                 raise RuntimeError("Hugging Face commit response did not include an immutable revision.")
-            # Read each file directly at the immutable commit revision.
-            # snapshot_download(force_download=True) can fail on the Hub's Xet
-            # transport even when the commit is present and readable. A direct
-            # file download avoids that snapshot/Xet path and still verifies
-            # exactly the committed revision.
-            from concurrent.futures import ThreadPoolExecutor
-
-            def read_committed(item):
-                path, expected_data = item
-                local_path = hf_hub_download(
-                    repo_id=REPO_ID, repo_type="dataset", filename=path,
-                    revision=revision, token=TOKEN,
-                )
-                actual_data = Path(local_path).read_bytes()
-                return path, expected_data, actual_data
-
+            # Verify all committed paths in one Hub metadata request. Downloading
+            # every file individually exhausts the free resolver quota (5,000/5m)
+            # for a batch containing thousands of coins.
+            infos = API.get_paths_info(
+                repo_id=REPO_ID, paths=list(staged.keys()),
+                repo_type="dataset", revision=revision,
+            )
+            info_by_path = {getattr(info, "path", None): info for info in infos}
             mismatches = []
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                for path, expected_data, actual_data in pool.map(read_committed, staged.items()):
-                    expected_hash, actual_hash = digest(expected_data), digest(actual_data)
-                    if actual_hash != expected_hash:
-                        mismatches.append(
-                            f"{path}: expected sha256={expected_hash} bytes={len(expected_data)}, "
-                            f"readback sha256={actual_hash} bytes={len(actual_data)}"
-                        )
+            for path, expected_data in staged.items():
+                info = info_by_path.get(path)
+                if info is None:
+                    mismatches.append(f"{path}: missing at committed revision {revision}")
+                    continue
+                remote_size = getattr(info, "size", None)
+                if remote_size is not None and int(remote_size) != len(expected_data):
+                    mismatches.append(
+                        f"{path}: expected bytes={len(expected_data)}, remote bytes={remote_size}"
+                    )
+                    continue
+                lfs = getattr(info, "lfs", None)
+                remote_sha = getattr(lfs, "sha256", None) if lfs else None
+                if remote_sha and remote_sha != digest(expected_data):
+                    mismatches.append(
+                        f"{path}: expected sha256={digest(expected_data)}, remote sha256={remote_sha}"
+                    )
             if mismatches:
-                print("Hugging Face readback mismatch details:")
+                print("Hugging Face commit metadata mismatch details:")
                 for mismatch in mismatches[:20]:
                     print(f"  {mismatch}")
-                raise RuntimeError(f"{len(mismatches)} staged file(s) failed immutable-revision readback.")
+                raise RuntimeError(f"{len(mismatches)} staged file(s) failed immutable-revision metadata verification.")
             committed = True
-            print(f"Verified staged files against immutable Hub revision {revision}.")
+            print(
+                f"Verified {len(staged)} committed paths and file sizes at immutable Hub revision "
+                f"{revision}; LFS SHA-256 checked where Hub exposes it."
+            )
             break
         except Exception as exc:
             print(f"Hub upload/readback attempt {attempt + 1}/3 failed: {type(exc).__name__}: {exc}")
@@ -165,7 +169,10 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
     if not files:
         raise RuntimeError(f"No local coin files found for {venue}/{mint}")
     ledger_path = ledger_remote(venue, mint)
-    ledger = load_remote_json(ledger_path) or {
+    # restore() materializes all existing ledgers locally. Read that local copy
+    # instead of issuing one Hugging Face resolver request per coin.
+    ledger_local = ROOT / Path(ledger_path).relative_to(REMOTE_ROOT)
+    ledger = json.loads(ledger_local.read_text(encoding="utf-8")) if ledger_local.is_file() else {
         "schema_version": "3.0.0", "mint": mint, "launch_venue": venue,
         "state": "DISCOVERED", "dataset_paths": [], "content_hashes": {},
         "streams": {}, "attempt_count": 0,
@@ -307,6 +314,8 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         "completion_rule": "Transaction history is resumably complete only after pagination coverage and per-file remote readback SHA-256 verification; research COMPLETE additionally requires capture.researchReady=true. Missing historical USD/FDV/holder/liquidity evidence remains PARTIAL.",
     })
     ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
+    ledger_local.parent.mkdir(parents=True, exist_ok=True)
+    ledger_local.write_bytes(ledger_bytes)
     upload_verified(ledger_path, ledger_bytes, f"Update resumable coin ledger: {venue}/{mint} ({ledger['state']})")
     print(f"V3 staged {venue}/{mint}: state={ledger['state']} files={len(paths)}")
 
@@ -367,6 +376,15 @@ def restore():
     cp = snapshot / CHECKPOINT_REMOTE
     if cp.is_file():
         shutil.copyfile(cp, ROOT / "checkpoint.json")
+    # Keep the restored per-coin ledgers locally so publishing never performs
+    # thousands of individual resolve/download requests against the Hub.
+    remote_ledgers = base / "control" / "ledger"
+    if remote_ledgers.exists():
+        for ledger_file in remote_ledgers.rglob("*.json"):
+            relative = ledger_file.relative_to(base)
+            local_ledger = ROOT / relative
+            local_ledger.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ledger_file, local_ledger)
     raw = base / "raw"
     if raw.exists():
         for venue_dir in raw.iterdir():
