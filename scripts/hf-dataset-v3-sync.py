@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download, snapshot_download
+
+STAGED: dict[str, bytes] = {}
 
 REPO_ID = "ndeda/solana-scalping-data"
 TOKEN = os.environ.get("HF_TOKEN")
@@ -29,22 +31,35 @@ def digest(data: bytes) -> str:
 
 
 def upload_verified(path_in_repo: str, data: bytes, message: str) -> str:
-    expected = digest(data)
-    API.upload_file(
-        path_or_fileobj=BytesIO(data),
-        path_in_repo=path_in_repo,
+    # Stage files; publish_batch commits all changed coin files, ledgers and
+    # the checkpoint atomically in one Hub commit to respect the free 128/hour limit.
+    STAGED[path_in_repo] = data
+    return digest(data)
+
+
+def flush_staged(message: str = "Publish resumable Solana research batch") -> None:
+    if not STAGED:
+        return
+    staged = dict(STAGED)
+    operations = [
+        CommitOperationAdd(path_in_repo=path, path_or_fileobj=BytesIO(data))
+        for path, data in sorted(staged.items())
+    ]
+    API.create_commit(
         repo_id=REPO_ID,
         repo_type="dataset",
+        operations=operations,
         commit_message=message,
     )
-    downloaded = Path(hf_hub_download(
-        repo_id=REPO_ID, filename=path_in_repo, repo_type="dataset",
-        token=TOKEN, force_download=True,
-    )).read_bytes()
-    actual = digest(downloaded)
-    if actual != expected:
-        raise RuntimeError(f"Remote readback hash mismatch for {path_in_repo}: expected {expected}, got {actual}")
-    return expected
+    for path, expected_data in staged.items():
+        downloaded = Path(hf_hub_download(
+            repo_id=REPO_ID, filename=path, repo_type="dataset",
+            token=TOKEN, force_download=True,
+        )).read_bytes()
+        if digest(downloaded) != digest(expected_data):
+            raise RuntimeError(f"Remote readback hash mismatch for {path}")
+        STAGED.pop(path, None)
+    print(f"Committed and SHA-256 verified {len(staged)} dataset files in one Hub commit.")
 
 
 def mint_parts(venue: str, mint: str):
@@ -233,17 +248,8 @@ def publish_coin(venue: str, mint: str, changed_paths=None):
         "completion_rule": "Transaction history is resumably complete only after pagination coverage and per-file remote readback SHA-256 verification; research COMPLETE additionally requires capture.researchReady=true. Missing historical USD/FDV/holder/liquidity evidence remains PARTIAL.",
     })
     ledger_bytes = (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode()
-    API.upload_file(
-        path_or_fileobj=BytesIO(ledger_bytes), path_in_repo=ledger_path,
-        repo_id=REPO_ID, repo_type="dataset",
-        commit_message=f"Update resumable coin ledger: {venue}/{mint} ({ledger['state']})",
-    )
-    remote_ledger = Path(hf_hub_download(
-        repo_id=REPO_ID, filename=ledger_path, repo_type="dataset", token=TOKEN, force_download=True,
-    )).read_bytes()
-    if digest(remote_ledger) != digest(ledger_bytes):
-        raise RuntimeError(f"Ledger readback verification failed for {venue}/{mint}")
-    print(f"V3 published {venue}/{mint}: state={ledger['state']} files={len(paths)} verified=true")
+    upload_verified(ledger_path, ledger_bytes, f"Update resumable coin ledger: {venue}/{mint} ({ledger['state']})")
+    print(f"V3 staged {venue}/{mint}: state={ledger['state']} files={len(paths)}")
 
 
 def publish_batch(paths):
@@ -265,6 +271,7 @@ def publish_batch(paths):
     checkpoint = ROOT / "checkpoint.json"
     if checkpoint.is_file():
         upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint")
+    flush_staged()
     if not grouped:
         print("No coin files changed; checkpoint refreshed if present.")
 
@@ -355,6 +362,7 @@ def write_test():
     path = f"{REMOTE_ROOT}/_preflight/write-test-{os.environ.get('GITHUB_RUN_ID', 'manual')}.txt"
     payload = b"temporary v3 dataset permission check\n"
     h = upload_verified(path, payload, "Preflight: verify v3 dataset write/read access")
+    flush_staged("Preflight: verify v3 dataset write/read access")
     API.delete_file(path_in_repo=path, repo_id=REPO_ID, repo_type="dataset", commit_message="Preflight: remove v3 test file")
     print(f"V3 write/read/delete verified: {h}")
 
@@ -369,5 +377,6 @@ if __name__ == "__main__":
         publish_batch(sys.argv[2:])
     elif command == "publish-coin" and len(sys.argv) == 4:
         publish_coin(sys.argv[2], sys.argv[3])
+        flush_staged()
     else:
         raise SystemExit("Use restore, write-test, publish-batch [local paths...], or publish-coin VENUE MINT")
