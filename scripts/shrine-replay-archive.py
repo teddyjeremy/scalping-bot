@@ -34,8 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
- if s.get("collectorVersion") != 7:
-  s["replayHours"]={}; s["collectorVersion"]=7
+ if s.get("collectorVersion") != 8:
+  s["replayHours"]={}; s["collectorVersion"]=8
  return s
 
 def save(s):
@@ -104,8 +104,8 @@ def trade_row(r,e,idx):
   "transactionFeePayer":e.get("txSigner"),"transactionFeeLamports":e.get("txFeeLamports"),
   "priorityFeeLamports":e.get("priorityFeeLamports"),"tipLamports":e.get("tipLamports"),
   "computeUnitsConsumed":e.get("computeUnitsConsumed"),"tokenAmountRaw":str(e.get("tokenAmountRaw") or "0"),
-  "tokenDecimals":e.get("decimals",r.get("decimals")),"quoteMint":qm,"quoteAmountRaw":str(e.get("quoteAmountRaw") or "0"),
-  "quoteDecimals":QUOTE_DECIMALS.get(qm),"pool":e.get("pool"),"protocol":e.get("protocol"),
+  "tokenDecimals":e.get("decimals",r.get("decimals")),"quoteMint":qm,"quoteAmountRaw":str(e.get("quoteAmountRaw") or "0"),"quoteAmount":e.get("quoteAmount"),
+  "tokenAmount":e.get("tokenAmount"),"quoteDecimals":QUOTE_DECIMALS.get(qm),"pool":e.get("pool"),"protocol":e.get("protocol"),
   "txIndex":e.get("txIndex"),"tradersInvolved":e.get("tradersInvolved"),
   "breakdown":e.get("breakdown"),"fees":e.get("fees") or {},
   "reserveEvidence":{"tokensInPool":e.get("tokensInPool"),"quoteInPool":e.get("quoteInPool"),
@@ -123,70 +123,105 @@ def summarize(s,r):
    if line.strip():
     x=json.loads(line)
     if x.get("recordType")=="historical_trade_event": rows.append(x)
- buyers=set(); sellers=set(); vol=defaultdict(lambda:{"buys":0,"sells":0,"buyVolume":0.0,"sellVolume":0.0})
+ buyers=set(); sellers=set(); signatures=set()
+ vol=defaultdict(lambda:{"buys":0,"sells":0,"buyVolume":0.0,"sellVolume":0.0,"quoteDecimals":None,"amountSourceCounts":{}})
  txfee={}; priority={}; tips={}; prices=[]; buckets=set(); creator_sells=0; early=set(); top=defaultdict(float); fee_totals=defaultdict(float)
+ leg_count=0
  for x in rows:
-  side=x.get("side"); user=x.get("user"); qm=x.get("quoteMint") or "unknown"
-  dec=x.get("quoteDecimals"); raw=int(x.get("quoteAmountRaw") or 0)
-  amount=raw/(10**dec) if isinstance(dec,int) and 0<=dec<=18 else 0
-  if side=="buy":
-   vol[qm]["buys"]+=1; vol[qm]["buyVolume"]+=amount
-   if user: buyers.add(user); top[user]+=amount
-   if user and int(x.get("secondsSinceLaunch") or 0)<=5: early.add(user)
-  elif side=="sell":
-   vol[qm]["sells"]+=1; vol[qm]["sellVolume"]+=amount
-   if user: sellers.add(user)
-   if user==r.get("creator"): creator_sells+=1
   sig=x.get("signature")
-  if sig and isinstance(x.get("transactionFeeLamports"),int): txfee[sig]=x["transactionFeeLamports"]
-  if sig and isinstance(x.get("priorityFeeLamports"),int): priority[sig]=x["priorityFeeLamports"]
-  if sig and isinstance(x.get("tipLamports"),int): tips[sig]=x["tipLamports"]
+  if sig:
+   signatures.add(sig)
+   if isinstance(x.get("transactionFeeLamports"),int): txfee[sig]=x["transactionFeeLamports"]
+   if isinstance(x.get("priorityFeeLamports"),int): priority[sig]=x["priorityFeeLamports"]
+   if isinstance(x.get("tipLamports"),int): tips[sig]=x["tipLamports"]
   for fee_name, fee_value in (x.get("fees") or {}).items():
    if isinstance(fee_value,(int,float)): fee_totals[fee_name]+=float(fee_value)
    elif isinstance(fee_value,dict):
     for sub_name,sub_value in fee_value.items():
      if isinstance(sub_value,(int,float)): fee_totals[f"{fee_name}.{sub_name}"]+=float(sub_value)
-  try:
-   price=float(x.get("impliedQuotePrice"))
-   if price>0: prices.append((int(x.get("blockTime") or 0),int(x.get("slot") or 0),price))
-  except (TypeError,ValueError): pass
-  off=int(x.get("secondsSinceLaunch") or 0)
-  if 0<=off<=WINDOW: buckets.add(min(off//10,59))
+  breakdown=x.get("breakdown")
+  legs=breakdown if isinstance(breakdown,list) and breakdown else [x]
+  for leg_index,leg in enumerate(legs):
+   leg_count+=1
+   side=leg.get("action") or x.get("side")
+   user=leg.get("trader") or x.get("user")
+   qm=x.get("quoteMint") or "unknown"
+   dec=x.get("quoteDecimals")
+   quote_ui=leg.get("quoteAmount")
+   if quote_ui is None and len(legs)==1: quote_ui=x.get("quoteAmount")
+   if isinstance(quote_ui,(int,float)):
+    amount=float(quote_ui); amount_source="provider_ui_amount"
+   else:
+    raw=leg.get("quoteAmountRaw")
+    if raw is None and len(legs)==1: raw=x.get("quoteAmountRaw")
+    amount=int(raw or 0)/(10**dec) if isinstance(dec,int) and 0<=dec<=18 else 0.0
+    amount_source="raw_amount_and_decimals" if isinstance(dec,int) and raw is not None else "unknown"
+   vol[qm]["quoteDecimals"]=dec
+   sources=vol[qm]["amountSourceCounts"]
+   sources[amount_source]=sources.get(amount_source,0)+1
+   offset=int(x.get("secondsSinceLaunch") or 0)
+   if side=="buy":
+    vol[qm]["buys"]+=1; vol[qm]["buyVolume"]+=amount
+    if user:
+     buyers.add(user); top[user]+=amount
+     if 0<=offset<=5: early.add(user)
+   elif side=="sell":
+    vol[qm]["sells"]+=1; vol[qm]["sellVolume"]+=amount
+    if user:
+     sellers.add(user)
+     if user==r.get("creator"): creator_sells+=1
+   try:
+    price=float(leg.get("price") if leg.get("price") is not None else x.get("impliedQuotePrice"))
+    if price>0:
+     prices.append((int(x.get("blockTime") or 0),int(x.get("slot") or 0),
+                    int(x.get("txIndex") or 0),int(leg.get("innerIndex") or 0),
+                    int(leg.get("ixIndex") or 0),price))
+   except (TypeError,ValueError): pass
+   if 0<=offset<=WINDOW: buckets.add(min(offset//10,59))
  prices.sort(); peak=0; dd=0
- for _,_,p in prices:
-  peak=max(peak,p)
-  if peak: dd=max(dd,(peak-p)/peak*100)
- through=int(s.get("processedThrough",START)); complete=through>=r["blockTime"]+WINDOW
- first=prices[0][2] if prices else None; last=prices[-1][2] if prices else None
+ for item in prices:
+  price=item[-1]; peak=max(peak,price)
+  if peak: dd=max(dd,(peak-price)/peak*100)
+ through=int(s.get("processedThrough",START)); replay_processed=through>=r["blockTime"]+WINDOW
+ first=prices[0][-1] if prices else None; last=prices[-1][-1] if prices else None
  top_share=max(top.values())/sum(top.values())*100 if sum(top.values()) else None
  summary={"schemaVersion":1,"recordType":"historical_launch_research_summary","venue":r["venue"],"mint":r["mint"],
   "source":"shrine_public_hourly_replay","sourcePageCount":len(pages),"sourcePageFiles":[p.name for p in pages],
   "sourcePageFingerprint":hashlib.sha256("".join(p.name+hashlib.sha256(p.read_bytes()).hexdigest() for p in pages).encode()).hexdigest(),
   "launchSignature":r["signature"],"launchTime":r["blockTime"],"launchSlot":r["slot"],
   "creator":r.get("creator"),"launchFeePayer":r.get("feePayer"),
-  "tradeEvents":{"total":len(rows),"buys":sum(v["buys"] for v in vol.values()),
-   "sells":sum(v["sells"] for v in vol.values()),"uniqueBuyers":len(buyers),"uniqueSellers":len(sellers),
-   "uniqueTraders":len(buyers|sellers),"creatorSellEvents":creator_sells,
-   "buyersWithinFirst5Seconds":len(early),"topBuyerShareOfBuyVolume":top_share},
-  "volumeByQuoteMint":dict(vol),"pricePath":{"observations":len(prices),"firstPrice":first,"lastPrice":last,
-   "maxDrawdownPct":dd,"unit":"quote asset per token; not USD"},
-  "networkFees":{"uniqueTransactions":len(txfee),"transactionFeeLamports":sum(txfee.values()),
-   "priorityFeeLamports":sum(priority.values()),"tipLamports":sum(tips.values())},
+  "tradeEvents":{"providerEvents":len(rows),"total":leg_count,"swapLegs":leg_count,
+   "buys":sum(v["buys"] for v in vol.values()),"sells":sum(v["sells"] for v in vol.values()),
+   "uniqueBuyers":len(buyers),"uniqueSellers":len(sellers),"uniqueTraders":len(buyers|sellers),
+   "creatorSellEvents":creator_sells,"buyersWithinFirst5Seconds":len(early),
+   "topBuyerShareOfBuyVolume":top_share},
+  "volumeByQuoteMint":dict(vol),
+  "pricePath":{"observations":len(prices),"firstPrice":first,"lastPrice":last,
+   "maxDrawdownPct":dd,"unit":"quote asset per token; not USD",
+   "priceSource":"decoded per-leg replay price when available"},
+  "networkFees":{"uniqueTransactionsWithFeeData":len(txfee),
+   "transactionFeeLamports":sum(txfee.values()) if txfee else None,
+   "priorityFeeLamports":sum(priority.values()) if priority else None,
+   "tipLamports":sum(tips.values()) if tips else None,
+   "feeDataCoverage":len(txfee)/len(signatures) if signatures else 0.0},
   "protocolAndVenueFees":dict(fee_totals),
   "developerActivity":{"creator":r.get("creator"),"creatorSellEvents":creator_sells,"launchFeePayer":r.get("feePayer")},
-  "capture":{"windowSeconds":WINDOW,"transactionHistoryComplete":complete,"complete":False,"researchReady":False,
+  "capture":{"windowSeconds":WINDOW,"replayWindowProcessed":replay_processed,
+   "transactionHistoryComplete":False,"complete":False,"researchReady":False,
    "timeCoverage":{"bucketSeconds":10,"bucketCount":60,"observedBuckets":sorted(buckets),
     "emptyBuckets":[i for i in range(60) if i not in buckets],
     "earliestObservedSecondsAfterLaunch":min((int(x.get("secondsSinceLaunch") or 0) for x in rows),default=None),
     "latestObservedSecondsAfterLaunch":max((int(x.get("secondsSinceLaunch") or 0) for x in rows),default=None),
-    "gapAccountingComplete":complete,"bucketInterpretation":"Event presence in this replay source; an empty bucket does not prove no on-chain activity."},
-   "totalSourcePages":len(pages),"sources":{"shrine_hourly_replay":{"complete":complete,"pages":len(pages)}},
-   "completionBlockers":["historical_usd_price_unavailable","historical_holder_snapshots_unavailable",
-    "locked_liquidity_not_verified","failed_transaction_history_not_in_replay"]},
+    "gapAccountingComplete":False,
+    "bucketInterpretation":"Buckets show event presence in the replay source only; an empty bucket does not prove no on-chain activity."},
+   "totalSourcePages":len(pages),"sources":{"shrine_hourly_replay":{"complete":replay_processed,"pages":len(pages)}},
+   "completionBlockers":["full_transaction_history_not_supplied","historical_usd_price_unavailable",
+    "historical_holder_snapshots_unavailable","locked_liquidity_not_verified","failed_transaction_history_not_in_replay"]},
   "venueStateClassification":{"launchVenue":r["venue"],"bondingCurveStatus":"event_reserve_evidence_only",
    "lockedLiquidityStatus":"unverified","safetyClassification":"unverified"},
   "dataQuality":{"tradeSource":"public replay event archive","rawEventsRetained":True,
-   "failedTransactions":"not supplied by replay stream","walletLabels":"heuristics only; no bot/sniper identity asserted"}}
+   "tradeMetricsExpandedFromBreakdownLegs":True,"failedTransactions":"not supplied by replay stream",
+   "walletLabels":"heuristics only; no bot/sniper identity asserted"}}
  dump(ld/f"{r['mint']}.summary.json",summary)
  screen_path=ld/f"{r['mint']}.screening.json"
  if screen_path.is_file():
@@ -200,7 +235,7 @@ def summarize(s,r):
     "historicalHolderSnapshot":False}}
  screen["behaviouralMetrics"]=summary["tradeEvents"]; screen["overallStatus"]="unverified"
  dump(screen_path,screen)
- return complete
+ return replay_processed
 
 def publish(changed):
  normalised=[]
