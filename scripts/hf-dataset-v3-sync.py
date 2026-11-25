@@ -320,10 +320,22 @@ def restore():
     if ROOT.exists():
         shutil.rmtree(ROOT)
     ROOT.mkdir(parents=True, exist_ok=True)
+    # Restore only the files the replay collector actually needs. The previous
+    # dataset_v3/** pattern pulled every historical page and made each run spend
+    # most of its 60-minute budget downloading unrelated data.
+    restore_patterns = [
+        CHECKPOINT_REMOTE,
+        f"{REMOTE_ROOT}/control/ledger/**",
+        f"{REMOTE_ROOT}/raw/*/**/launch.json",
+        f"{REMOTE_ROOT}/raw/*/**/summary.json",
+        f"{REMOTE_ROOT}/raw/*/**/screening.json",
+        f"{REMOTE_ROOT}/raw/*/**/transaction_pages/replay-*.jsonl",
+    ]
+    print("Restoring checkpoint, per-coin ledgers, launch metadata, and replay pages only.")
     try:
         snapshot = Path(snapshot_download(
             repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
-            allow_patterns=[f"{REMOTE_ROOT}/**"],
+            allow_patterns=restore_patterns, max_workers=8,
         ))
     except Exception as exc:
         msg = str(exc).lower()
