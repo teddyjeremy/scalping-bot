@@ -353,6 +353,9 @@ def restore():
                 mint = ledger.get("mint")
                 if not mint:
                     continue
+                launch_time = ledger.get("launch_time_utc")
+                if not launch_time or not (START_DAY <= launch_time[:10] < END_DAY):
+                    continue
                 capture = ledger.get("capture") or {}
                 if not capture.get("transactionHistoryComplete"):
                     continue
