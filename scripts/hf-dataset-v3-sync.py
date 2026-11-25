@@ -64,24 +64,31 @@ def flush_staged(message: str = "Publish resumable Solana research batch") -> No
             revision = getattr(commit_info, "oid", None) or getattr(commit_info, "commit_id", None)
             if not revision:
                 raise RuntimeError("Hugging Face commit response did not include an immutable revision.")
-            snapshot = Path(snapshot_download(
-                repo_id=REPO_ID, repo_type="dataset", token=TOKEN,
-                revision=revision, allow_patterns=list(staged.keys()),
-                force_download=True, max_workers=4,
-            ))
+            # Read each file directly at the immutable commit revision.
+            # snapshot_download(force_download=True) can fail on the Hub's Xet
+            # transport even when the commit is present and readable. A direct
+            # file download avoids that snapshot/Xet path and still verifies
+            # exactly the committed revision.
+            from concurrent.futures import ThreadPoolExecutor
+
+            def read_committed(item):
+                path, expected_data = item
+                local_path = hf_hub_download(
+                    repo_id=REPO_ID, repo_type="dataset", filename=path,
+                    revision=revision, token=TOKEN,
+                )
+                actual_data = Path(local_path).read_bytes()
+                return path, expected_data, actual_data
+
             mismatches = []
-            for path, expected_data in staged.items():
-                downloaded_path = snapshot / path
-                if not downloaded_path.is_file():
-                    mismatches.append(f"{path}: missing at committed revision {revision}")
-                    continue
-                actual_data = downloaded_path.read_bytes()
-                expected_hash, actual_hash = digest(expected_data), digest(actual_data)
-                if actual_hash != expected_hash:
-                    mismatches.append(
-                        f"{path}: expected sha256={expected_hash} bytes={len(expected_data)}, "
-                        f"readback sha256={actual_hash} bytes={len(actual_data)}"
-                    )
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for path, expected_data, actual_data in pool.map(read_committed, staged.items()):
+                    expected_hash, actual_hash = digest(expected_data), digest(actual_data)
+                    if actual_hash != expected_hash:
+                        mismatches.append(
+                            f"{path}: expected sha256={expected_hash} bytes={len(expected_data)}, "
+                            f"readback sha256={actual_hash} bytes={len(actual_data)}"
+                        )
             if mismatches:
                 print("Hugging Face readback mismatch details:")
                 for mismatch in mismatches[:20]:
