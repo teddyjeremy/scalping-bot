@@ -156,7 +156,7 @@ async function hydrateHistoryRows(rows: HeliusHistoryRow[], label: string) {
 type TradeSourceCursor = { before?: string; paginationToken?: string; complete: boolean; pages: number };
 type MintTradeCursor = { before?: string; complete: boolean; pages: number; sources: Record<string, TradeSourceCursor> };
 type LaunchLabIndexCursor = { nextPageId?: string; complete: boolean; pages: number; lastCreateAt?: number };
-type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launchLabIndexes?: Record<string, LaunchLabIndexCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
+type Cursor = { schemaVersion: 1; start: number; end: number; programs: Record<string, { before?: string; paginationToken?: string; address?: string; oldestScannedBlockTime?: number; latestScannedBlockTime?: number; complete: boolean }>; tradeCursors?: Record<string, MintTradeCursor>; launchLabIndexes?: Record<string, LaunchLabIndexCursor>; launches: Record<string, { venue: string; mint: string; signature: string; slot: number; blockTime: number; creator: string | null; feePayer: string | null; quoteMint: string | null; pool: string | null }> };
 const cursorPath = path.join(ROOT, "checkpoint.json");
 const mintShard = (mint: string) => createHash("sha256").update(mint).digest("hex").slice(0, 2);
 const launchRecordPath = (record: { venue: string; mint: string }, suffix = ".json") => path.join(ROOT, "launches", record.venue, mintShard(record.mint), record.mint + suffix);
@@ -344,7 +344,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       await uploadDirtyFiles();
       pagesSinceUpload = 0;
     }
-    const oldestProgress = progress.oldestScannedBlockTime ?? progress.lastCreateAt && Math.floor(progress.lastCreateAt / 1000);
+    const oldestProgress = progress.oldestScannedBlockTime ?? (progress.lastCreateAt != null ? Math.floor(progress.lastCreateAt / 1000) : undefined);
     const oldestIso = oldestProgress ? new Date(oldestProgress * 1000).toISOString() : "unknown";
     console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
