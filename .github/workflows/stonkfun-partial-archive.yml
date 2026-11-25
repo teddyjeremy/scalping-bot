@@ -65,10 +65,6 @@ jobs:
               raise SystemExit(f"Replay archive is missing required hours: {missing[:10]}")
           print("REPLAY_SOURCE_COVERAGE_VERIFIED")
           PY
-      - name: Verify Hugging Face write/read/delete access
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: python scripts/hf-dataset-v3-sync.py write-test
       - name: Collect November 1 launches and first ten minutes from free hourly replay
         timeout-minutes: 50
         run: python scripts/shrine-replay-archive.py
