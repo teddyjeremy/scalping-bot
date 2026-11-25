@@ -1,4 +1,5 @@
 name: Resume November 1 replay collection
+# Publisher uses local ledger state and batched Hub metadata verification.
 
 on:
   push:
