@@ -75,7 +75,7 @@ jobs:
         timeout-minutes: 50
         run: python scripts/shrine-replay-archive.py
       - name: Flush checkpoint and any staged dataset files
-        if: always()
+        if: success()
         run: python scripts/hf-dataset-v3-sync.py publish-batch
       - name: Preserve run output as artifact
         if: always()
