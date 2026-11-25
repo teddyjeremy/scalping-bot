@@ -209,13 +209,13 @@ def process_hour(hour,s):
  start_hour=datetime.strptime(hour,"%Y/%m/%d/%H").replace(tzinfo=timezone.utc).timestamp()
  end_hour=start_hour+3600
  def flush():
-  for e in group:
+  for idx,e in enumerate(group):
    mint=e.get("mint"); r=s["launches"].get(mint) if isinstance(mint,str) else None
    if not r or e.get("action") not in ("buy","sell") or e.get("protocol") not in TRADES: continue
    ts=int(e.get("timestamp") or 0); off=ts-r["blockTime"]
    if not 0<=off<=WINDOW: continue
    _,td=paths(r); page=td/f"replay-{hour.replace('/','')}.jsonl"
-   append(page,[trade_row(r,e,len(group))]); changed.add(page.as_posix()); touched.add(mint); counts["trades"]+=1
+   append(page,[trade_row(r,e,idx)]); changed.add(page.as_posix()); touched.add(mint); counts["trades"]+=1
  try:
   with p.open("rb") as raw:
    reader=zstandard.ZstdDecompressor().stream_reader(raw)
