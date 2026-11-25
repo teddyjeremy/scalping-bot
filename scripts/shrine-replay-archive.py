@@ -34,8 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
- if s.get("collectorVersion") != 4:
-  s["replayHours"]={}; s["collectorVersion"]=4
+ if s.get("collectorVersion") != 5:
+  s["replayHours"]={}; s["collectorVersion"]=5
  return s
 
 def save(s):
@@ -272,7 +272,7 @@ def process_hour(hour,s):
        counts["launches"]+=1
       else:
        ld,_=paths(old)
-       if not (ld/f"{mint}.json").exists():
+       if not (ld/f"{mint}.json").is_file() or not (ld/f"{mint}.screening.json").is_file():
         persist_launch(old,e)
         changed.update([(ld/f"{mint}.json").as_posix(),(ld/f"{mint}.screening.json").as_posix()])
     group.append(e)
