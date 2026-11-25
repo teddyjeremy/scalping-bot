@@ -346,7 +346,7 @@ def restore():
     base = snapshot / REMOTE_ROOT
     cp = snapshot / CHECKPOINT_REMOTE
     if cp.is_file():
-        shutil.copy2(cp, ROOT / "checkpoint.json")
+        shutil.copyfile(cp, ROOT / "checkpoint.json")
     raw = base / "raw"
     if raw.exists():
         for venue_dir in raw.iterdir():
@@ -369,17 +369,17 @@ def restore():
                         local_launch_dir = ROOT / "launches" / venue / shard_dir.name
                         local_launch_dir.mkdir(parents=True, exist_ok=True)
                         if launch.is_file():
-                            shutil.copy2(launch, local_launch_dir / f"{mint}.json")
+                            shutil.copyfile(launch, local_launch_dir / f"{mint}.json")
                         if summary.is_file():
-                            shutil.copy2(summary, local_launch_dir / f"{mint}.summary.json")
+                            shutil.copyfile(summary, local_launch_dir / f"{mint}.summary.json")
                         if screening.is_file():
-                            shutil.copy2(screening, local_launch_dir / f"{mint}.screening.json")
+                            shutil.copyfile(screening, local_launch_dir / f"{mint}.screening.json")
                         page_dir = ROOT / "trades" / venue / shard_dir.name / mint
                         pages = mint_dir / "transaction_pages"
                         if pages.exists():
                             page_dir.mkdir(parents=True, exist_ok=True)
                             for page in pages.glob("*.jsonl"):
-                                shutil.copy2(page, page_dir / page.name)
+                                shutil.copyfile(page, page_dir / page.name)
     # Reconcile transaction-history-complete COMPLETE/PARTIAL per-coin ledgers in case a run stopped after a coin
     # ledger commit but before the global checkpoint upload.
     checkpoint_file = ROOT / "checkpoint.json"
