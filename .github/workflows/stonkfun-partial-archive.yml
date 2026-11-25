@@ -2,10 +2,6 @@ name: StonkFun-only partial historical archive
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "scripts/historical-archive.ts"
-      - ".github/workflows/stonkfun-partial-archive.yml"
 
 concurrency:
   group: historical-solana-archive
