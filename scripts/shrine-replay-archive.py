@@ -238,34 +238,25 @@ def summarize(s,r):
  return replay_processed
 
 def publish(changed):
+ # Publish every changed coin from this replay hour in ONE Hub commit.
+ # The free Hugging Face tier limits repository commit creation to 128/hour;
+ # splitting 1,574 coins into groups of 50 created ~32 commits per hour.
  normalised=[]
  for raw in changed:
   p=Path(raw)
   try: p=p.relative_to(ROOT)
   except ValueError: pass
   normalised.append(p.as_posix())
- grouped=defaultdict(list)
- for path in sorted(set(normalised)):
-  parts=Path(path).parts
-  if len(parts)>=4 and parts[0]=="launches":
-   venue=parts[1]; filename=parts[3]
-   mint=filename.removesuffix(".screening.json").removesuffix(".summary.json").removesuffix(".json")
-  elif len(parts)>=5 and parts[0]=="trades":
-   venue,mint=parts[1],parts[3]
-  else:
-   continue
-  grouped[(venue,mint)].append(path)
- if not grouped:
+ paths=sorted(set(normalised))
+ if not paths:
   subprocess.run([sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch"],check=True)
   return
- keys=sorted(grouped)
- for offset in range(0,len(keys),50):
-  batch=keys[offset:offset+50]
-  batch_paths=[p for key in batch for p in grouped[key]]
-  env=os.environ.copy()
-  if offset+50<len(keys): env["SKIP_CHECKPOINT_UPLOAD"]="1"
-  else: env.pop("SKIP_CHECKPOINT_UPLOAD",None)
-  subprocess.run([sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*batch_paths],check=True,env=env)
+ print(f"Publishing {len(paths)} changed local files in one atomic Hub batch.")
+ subprocess.run(
+  [sys.executable,"scripts/hf-dataset-v3-sync.py","publish-batch",*paths],
+  check=True,
+  env={**os.environ,"SKIP_CHECKPOINT_UPLOAD":"0"},
+ )
 
 def download(hour):
  url=f"{BASE}/{hour}.jsonl.zst"
