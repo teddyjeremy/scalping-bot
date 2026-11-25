@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - ".github/workflows/resume-nov1-replay.yml"
+      - "scripts/hf-dataset-v3-sync.py"
+      - "scripts/shrine-replay-archive.py"
   workflow_dispatch:
 
 concurrency:
