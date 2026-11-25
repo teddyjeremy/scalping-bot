@@ -270,8 +270,8 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   // Pump create transactions include the protocol mint-authority PDA as an account.
   // The program id itself is not a reliable getSignaturesForAddress index target.
-  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY.toBase58() : program;
-  let progress = state.programs[program] ?? { complete: false };
+  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
+  let progress: Cursor["programs"][string] = state.programs[program] ?? { complete: false };
   if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
   } else {
@@ -344,7 +344,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       await uploadDirtyFiles();
       pagesSinceUpload = 0;
     }
-    const oldestProgress = progress.oldestScannedBlockTime ?? (progress.lastCreateAt != null ? Math.floor(progress.lastCreateAt / 1000) : undefined);
+    const oldestProgress = progress.oldestScannedBlockTime;
     const oldestIso = oldestProgress ? new Date(oldestProgress * 1000).toISOString() : "unknown";
     console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
