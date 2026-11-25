@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateInitialScreen } from "../src/initial-screen.js";
+import { evaluateInitialScreen, evaluateBehaviouralWindows } from "../src/initial-screen.js";
 
 test("missing historical security evidence is unverified, never eligible", () => {
   const result = evaluateInitialScreen({});
@@ -37,4 +37,18 @@ test("migrated pool requires at least 90 percent verified lock", () => {
     migratedPoolLockPercent: 89.99
   });
   assert.equal(result.status, "rejected");
+});
+
+test("behavioural windows use only trades at or before each timestamp", () => {
+  const events = [
+    ...Array.from({ length: 5 }, (_, i) => ({ secondsSinceLaunch: 10 + i, side: "buy" as const, user: "wallet-" + i, quoteAmount: 2 })),
+    { secondsSinceLaunch: 40, side: "sell" as const, user: "seller", quoteAmount: 1 },
+    { secondsSinceLaunch: 90, side: "sell" as const, user: "seller2", quoteAmount: 20 }
+  ];
+  const windows = evaluateBehaviouralWindows(events);
+  assert.equal(windows[0].metrics.successfulBuyEvents, 5);
+  assert.equal(windows[0].metrics.successfulSellEvents, 0);
+  assert.equal(windows[1].metrics.successfulSellEvents, 1);
+  assert.equal(windows[2].metrics.successfulSellEvents, 2);
+  assert.equal(windows[2].status, "rejected");
 });
