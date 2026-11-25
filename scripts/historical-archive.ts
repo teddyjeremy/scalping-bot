@@ -167,15 +167,31 @@ let pagesSinceUpload = 0;
 const UPLOAD_EVERY_PAGES = Math.max(1, Number(process.env.HISTORY_UPLOAD_EVERY_PAGES ?? 20));
 const dirtyFiles = new Set<string>();
 function queueDirtyFile(file: string) { dirtyFiles.add(path.relative(path.resolve(ROOT), path.resolve(file)).replaceAll(path.sep, "/")); }
-async function uploadDirtyFiles() {
+const UPLOAD_BATCH_COINS = Math.max(1, Number(process.env.HISTORY_UPLOAD_BATCH_COINS ?? 5));
+function coinKeyFromLocalPath(file: string): string | null {
+  const parts = file.split("/");
+  if (parts[0] === "launches" && parts.length >= 4) {
+    return parts[1] + "/" + parts[3].replace(/\\.summary\\.json$|\\.json$/, "");
+  }
+  if (parts[0] === "trades" && parts.length >= 5) return parts[1] + "/" + parts[3];
+  return null;
+}
+async function uploadDirtyFiles(force = false) {
   const run = uploadQueue.then(async () => {
-    const files = [...dirtyFiles];
-    if (files.length) {
-      execFileSync("python", ["scripts/hf-dataset-v3-sync.py", "publish-batch", ...files], { stdio: "inherit" });
-      for (const file of files) dirtyFiles.delete(file);
-    } else {
-      execFileSync("python", ["scripts/hf-dataset-v3-sync.py", "publish-batch"], { stdio: "inherit" });
+    const allFiles = [...dirtyFiles];
+    const coinKeys = [...new Set(allFiles.map(coinKeyFromLocalPath).filter((v): v is string => v !== null))].sort();
+    if (!force && coinKeys.length < UPLOAD_BATCH_COINS) {
+      console.log(`Remote batch waiting: ${coinKeys.length}/${UPLOAD_BATCH_COINS} coins staged; local checkpoint is already saved.`);
+      return;
     }
+    const selectedKeys = force ? new Set(coinKeys) : new Set(coinKeys.slice(0, UPLOAD_BATCH_COINS));
+    const files = allFiles.filter(file => {
+      const key = coinKeyFromLocalPath(file);
+      return key !== null && selectedKeys.has(key);
+    });
+    if (!files.length) return;
+    execFileSync("python", ["scripts/hf-dataset-v3-sync.py", "publish-batch", ...files], { stdio: "inherit" });
+    for (const file of files) dirtyFiles.delete(file);
   });
   uploadQueue = run.catch(() => undefined);
   await run;
@@ -902,7 +918,7 @@ async function main() {
   const stonkScan = await Promise.allSettled([scanStonkFunIndex()]);
   if (await finishBatch(stonkScan)) return;
   if (process.env.HISTORY_DISCOVERY_ONLY === "true") {
-    if (pagesSinceUpload > 0) await uploadDirtyFiles();
+    if (dirtyFiles.size > 0) await uploadDirtyFiles(true);
     console.log(`Launch indexing only. Detailed trade capture is paused until the historical initial-screen stage is enabled. Launches indexed: ${Object.keys(state.launches).length}.`);
     return;
   }
