@@ -64,7 +64,8 @@ jobs:
           npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/historical-archive.ts
           python -m py_compile scripts/hf-dataset-v3-sync.py
           npm test
-      - name: DELETE ALL OLD HUGGING FACE DATASET FILES (clean rebuild)
+      - name: DELETE ALL OLD HUGGING FACE DATASET FILES (one-time clean rebuild)
+        if: github.event_name == 'push' && github.sha == '43d2fe553bee81bb48278bf48b7c92399dc62cb8'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
