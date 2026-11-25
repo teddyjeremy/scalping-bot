@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "generated_at_utc": "2026-11-25T04:16:54Z",
+  "generated_at_utc": "2026-11-25T04:19:09Z",
   "target_window": {
     "start_utc": "2026-11-01T00:00:00Z",
     "end_utc_exclusive": "2026-11-24T00:00:00Z"
@@ -121,6 +121,10 @@
     "full_backfill_started": false,
     "stonkfun_discovery_verified": true,
     "pumpfun_historical_universe_complete": false,
-    "external_sources_imported_into_primary_raw_tree": false
+    "external_sources_imported_into_primary_raw_tree": false,
+    "external_supplement_imported": true,
+    "external_supplement_target": "external_sources/loopholetape-pumpfun-launches",
+    "external_supplement_files_uploaded_and_readback_verified": 10,
+    "external_supplement_import_run": "https://github.com/teddyjeremy/scalping-bot/actions/runs/45545886582"
   }
 }
