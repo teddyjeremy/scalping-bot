@@ -58,7 +58,7 @@ def make_launch(e):
  return {"venue":"stonkfun" if e.get("protocol")=="STONKFUN" else "pumpfun",
          "mint":mint,"signature":str(sig),"slot":int(e.get("block") or 0),
          "blockTime":ts,"creator":e.get("creator"),"feePayer":e.get("txSigner"),
-         "quoteMint":e.get("quoteMint"),"pool":e.get("pool"),
+         "quoteMint":e.get("quoteMint"),"pool":e.get("pool"),"decimals":e.get("decimals"),
          "providerProtocol":e.get("protocol")}
 
 def persist_launch(r,e):
@@ -102,7 +102,7 @@ def trade_row(r,e,idx):
   "transactionFeePayer":e.get("txSigner"),"transactionFeeLamports":e.get("txFeeLamports"),
   "priorityFeeLamports":e.get("priorityFeeLamports"),"tipLamports":e.get("tipLamports"),
   "computeUnitsConsumed":e.get("computeUnitsConsumed"),"tokenAmountRaw":str(e.get("tokenAmountRaw") or "0"),
-  "tokenDecimals":e.get("decimals"),"quoteMint":qm,"quoteAmountRaw":str(e.get("quoteAmountRaw") or "0"),
+  "tokenDecimals":e.get("decimals",r.get("decimals")),"quoteMint":qm,"quoteAmountRaw":str(e.get("quoteAmountRaw") or "0"),
   "quoteDecimals":QUOTE_DECIMALS.get(qm),"pool":e.get("pool"),"protocol":e.get("protocol"),
   "txIndex":e.get("txIndex"),"tradersInvolved":e.get("tradersInvolved"),
   "breakdown":e.get("breakdown"),"fees":e.get("fees") or {},
