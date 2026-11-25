@@ -67,3 +67,27 @@ test("does not mistake associated-token Create logs or Pump buys for launch inst
     []
   );
 });
+
+import { normalizeTransactionInstructions } from "../src/transaction-instructions.js";
+
+test("resolves compiled program and account indexes to public keys", () => {
+  const result = normalizeTransactionInstructions({
+    accountKeys: ["Mint111", "PumpProgram111", "Creator111"],
+    instructions: [{ programIdIndex: 1, accounts: [0, 2], data: "encoded-data" }]
+  });
+  assert.deepEqual(result, [{ programId: "PumpProgram111", accounts: ["Mint111", "Creator111"], data: "encoded-data" }]);
+});
+
+test("normalizes parsed instructions and compiled inner instructions consistently", () => {
+  const result = normalizeTransactionInstructions(
+    {
+      accountKeys: ["Mint111", "PumpProgram111", "Creator111"],
+      instructions: [{ programId: "PumpProgram111", accounts: ["Mint111", "Creator111"], data: "top-level" }]
+    },
+    [{ instructions: [{ programIdIndex: 1, accounts: [0, 2], data: "inner" }] }]
+  );
+  assert.deepEqual(result, [
+    { programId: "PumpProgram111", accounts: ["Mint111", "Creator111"], data: "top-level" },
+    { programId: "PumpProgram111", accounts: ["Mint111", "Creator111"], data: "inner" }
+  ]);
+});
