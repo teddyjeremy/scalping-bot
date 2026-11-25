@@ -88,7 +88,8 @@ jobs:
           for start in range(0, len(files), 100):
               batch = files[start:start + 100]
               api.delete_files(
-                  repo_id=repo, repo_type="dataset", paths=batch,
+                  repo, batch,
+                  repo_type="dataset",
                   commit_message=f"Clean rebuild: delete old data batch {start // 100 + 1}"
               )
               print(f"Deleted {min(start + 100, len(files))}/{len(files)}")
