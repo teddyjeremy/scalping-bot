@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at_utc": "2026-11-25T04:16:54Z",
+  "target_window": {
+    "start_utc": "2026-11-01T00:00:00Z",
+    "end_utc_exclusive": "2026-11-24T00:00:00Z"
+  },
+  "rule": "External discovery/features sources are supplemental only. They do not make a coin COMPLETE or replace our own verified launch transaction and raw 10-minute transaction archive.",
+  "sources": [
+    {
+      "id": "loopholetape_pumpfun_launches",
+      "repository": "loopholetape/pumpfun-launches",
+      "url": "https://huggingface.co/datasets/loopholetape/pumpfun-launches",
+      "license": "CC-BY-4.0",
+      "type": "external_launch_registry_and_sampled_features",
+      "available_target_dates": [
+        "2026-11-01",
+        "2026-11-02",
+        "2026-11-03",
+        "2026-11-04",
+        "2026-11-05"
+      ],
+      "daily_launch_files": {
+        "2026-11-01": {
+          "path": "data/launches/2026-11-01.parquet",
+          "bytes": 5266982,
+          "coverage_note": "Known recorder gap 04:42-05:33 UTC; hundreds of launches may be absent."
+        },
+        "2026-11-02": {
+          "path": "data/launches/2026-11-02.parquet",
+          "bytes": 6062107
+        },
+        "2026-11-03": {
+          "path": "data/launches/2026-11-03.parquet",
+          "bytes": 6369664
+        },
+        "2026-11-04": {
+          "path": "data/launches/2026-11-04.parquet",
+          "bytes": 6889883
+        },
+        "2026-11-05": {
+          "path": "data/launches/2026-11-05.parquet",
+          "bytes": 6220699
+        }
+      },
+      "daily_feature_files": {
+        "2026-11-01": {
+          "path": "data/features/2026-11-01.parquet",
+          "bytes": 4923335
+        },
+        "2026-11-05": {
+          "path": "data/features/2026-11-05.parquet",
+          "bytes": 5568220
+        },
+        "note": "Daily feature files for all five target days were listed in the dataset; features are sampled non-randomly, and null means not sampled, not zero."
+      },
+      "quality_rules": [
+        "Use only rows with decoder_complete=1 for buy-derived features and rug-related outcomes.",
+        "Split classic and mayhem launches; mayhem outcomes are materially different.",
+        "Filter quote_asset=sol for SOL-denominated comparisons; other quote assets must not be interpreted as SOL.",
+        "Treat f10_* and f60_* nulls as not sampled, never as zero.",
+        "Do not use outcome or post-launch columns as entry-time features; keep them as labels only.",
+        "Coverage is not a complete independent census; the documented November 1 gap must remain explicit."
+      ],
+      "limitation": "This source has launch-level outcomes and sampled early-life features, not the full raw transaction-by-transaction 10-minute history required by our primary archive."
+    },
+    {
+      "id": "pumpdata_free_daily_launches",
+      "url": "https://pumpdata.fun/launches/{YYYY-MM-DD}.json",
+      "type": "free_daily_launch_index",
+      "probed_at_utc": "2026-11-25T04:16:54Z",
+      "results": {
+        "2026-11-23": {
+          "http_status": 200,
+          "complete": true,
+          "declared_count": 42881,
+          "rows": 42881,
+          "unique_mints": 42881,
+          "duplicate_mints": 0,
+          "invalid_rows": 0,
+          "out_of_day_rows": 0,
+          "raw_bytes": 5777737,
+          "coverage": "full UTC day from 00:00:01 to 23:59:57"
+        },
+        "2026-11-22": {
+          "http_status": 404,
+          "available": false,
+          "reason": "out_of_window",
+          "first_free_day": "2026-11-23"
+        },
+        "2026-11-24": {
+          "http_status": 200,
+          "complete": true,
+          "declared_count": 37140,
+          "rows": 37140,
+          "unique_mints": 37140,
+          "duplicate_mints": 0,
+          "invalid_rows": 0,
+          "out_of_day_rows": 0,
+          "raw_bytes": 5012653,
+          "coverage": "outside target window"
+        }
+      },
+      "fields": [
+        "mint",
+        "created",
+        "creator",
+        "deployer_launches_before",
+        "deployer_graduations_before",
+        "deployer_gap_s",
+        "deployer_launches_last_day",
+        "buyers_first_10s",
+        "bundle_supply_share",
+        "migrated_at"
+      ],
+      "limitation": "The free daily endpoint exposes only the last three UTC days. It is useful for Nov 23 discovery but does not supply the earlier Nov 1-22 raw trade history. Launch metadata and first-10-second bundle fields are not substitutes for our own transaction observations."
+    }
+  ],
+  "primary_archive_status": {
+    "own_raw_coin_records_uploaded": 0,
+    "full_backfill_started": false,
+    "stonkfun_discovery_verified": true,
+    "pumpfun_historical_universe_complete": false,
+    "external_sources_imported_into_primary_raw_tree": false
+  }
+}
