@@ -270,7 +270,7 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   // Pump create transactions include the protocol mint-authority PDA as an account.
   // The program id itself is not a reliable getSignaturesForAddress index target.
-  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
+  const queryAddress = program;
   let progress: Cursor["programs"][string] = state.programs[program] ?? { complete: false };
   if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
@@ -281,13 +281,17 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   let pages = 0;
   let createInstructionsFound = 0;
   let pumpProgramInstructionsSeen = 0;
+  let signaturesScanned = 0;
+  let eligibleSignaturesScanned = 0;
   while (pages < MAX_PAGES) {
     const enhanced = await getHeliusHistoryPage(queryAddress, START, END, progress.paginationToken);
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
     if (enhanced) {
       if (venue === "pumpfun" && pages === 0 && enhanced.data.length === 0) throw new Error("Pump mint-authority history index returned no transactions for the requested historical window.");
+      signaturesScanned += enhanced.data.length;
       hydrated = (await hydrateHistoryRows(enhanced.data, `Launch index ${venue} page ${pages + 1}`))
         .filter(row => row.entry.blockTime != null && row.entry.blockTime >= START && row.entry.blockTime < END);
+      eligibleSignaturesScanned += hydrated.length;
       progress.paginationToken = enhanced.paginationToken ?? undefined;
       if (!enhanced.data.length || !enhanced.paginationToken) progress.complete = true;
     } else {
@@ -296,7 +300,9 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         if (venue === "pumpfun" && pages === 0) throw new Error("Pump mint-authority address has no indexed signatures; refusing to mark the historical scan complete.");
         progress.complete = true; state.programs[program] = progress; await save(); break;
       }
+      signaturesScanned += signatures.length;
       const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
+      eligibleSignaturesScanned += eligible.length;
       hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
       progress.before = signatures[signatures.length - 1].signature;
       const oldest = signatures[signatures.length - 1].blockTime;
@@ -332,8 +338,8 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         }
       }
     }
-    if (venue === "pumpfun" && pages === 0 && pumpProgramInstructionsSeen === 0) {
-      throw new Error(`Pump mint-authority index returned ${hydrated.length} transactions but none contained a Pump program instruction. Refusing to burn the remaining page budget or mark this scan as useful. Index=${queryAddress}; inspect transaction normalization/provider responses.`);
+    if (venue === "pumpfun" && eligibleSignaturesScanned >= 500 && pumpProgramInstructionsSeen === 0) {
+      throw new Error(`Pump program index returned ${eligibleSignaturesScanned} transactions inside the requested date window but none contained a Pump program instruction. Refusing to continue with a broken transaction parser. Index=${queryAddress}.`);
     }
     if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) console.warn(`Pump program instructions were present but no create discriminator decoded on the first page; continuing pagination. Pump program instructions observed=${pumpProgramInstructionsSeen}.`);
     state.programs[program] = progress;
@@ -346,7 +352,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     }
     const oldestProgress = progress.oldestScannedBlockTime;
     const oldestIso = oldestProgress ? new Date(oldestProgress * 1000).toISOString() : "unknown";
-    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
+    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, signaturesScanned=${signaturesScanned}, eligibleSignatures=${eligibleSignaturesScanned}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
