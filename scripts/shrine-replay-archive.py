@@ -269,14 +269,63 @@ def publish(changed):
 
 def download(hour):
  url=f"{BASE}/{hour}.jsonl.zst"
- with S.get(url,stream=True,timeout=(30,300)) as res:
-  if res.status_code==404: raise RuntimeError(f"Replay archive missing hour {hour}; refusing false completion.")
-  res.raise_for_status()
-  with tempfile.NamedTemporaryFile(prefix="replay-",suffix=".zst",delete=False) as f:
-   p=Path(f.name)
-   for chunk in res.iter_content(1024*1024):
-    if chunk: f.write(chunk)
- return p
+ cache_dir=ROOT/".replay-downloads"
+ cache_dir.mkdir(parents=True,exist_ok=True)
+ safe_hour=hour.replace("/","-")
+ part=cache_dir/f"{safe_hour}.jsonl.zst.part"
+ final=cache_dir/f"{safe_hour}.jsonl.zst"
+ last_error=None
+ for attempt in range(1,6):
+  offset=part.stat().st_size if part.exists() else 0
+  headers={"Range":f"bytes={offset}-"} if offset else {}
+  try:
+   with S.get(url,headers=headers,stream=True,timeout=(30,120)) as res:
+    if res.status_code==404:
+     raise RuntimeError(f"Replay archive missing hour {hour}; refusing false completion.")
+    if offset and res.status_code==206:
+     mode="ab"
+    else:
+     if offset:
+      log("replay_download_restart",hour=hour,attempt=attempt,partialBytes=offset,
+          reason=f"server_status_{res.status_code}_did_not_honor_range")
+     mode="wb"
+     offset=0
+    res.raise_for_status()
+    expected_total=None
+    content_range=res.headers.get("Content-Range","")
+    if "/" in content_range:
+     try: expected_total=int(content_range.rsplit("/",1)[1])
+     except ValueError: expected_total=None
+    content_length=res.headers.get("Content-Length")
+    if expected_total is None and content_length and content_length.isdigit():
+     expected_total=offset+int(content_length)
+    with part.open(mode) as f:
+     for chunk in res.iter_content(1024*1024):
+      if chunk:
+       f.write(chunk)
+     f.flush()
+     os.fsync(f.fileno())
+   actual=part.stat().st_size
+   if expected_total is not None and actual!=expected_total:
+    raise IOError(f"Incomplete replay download for {hour}: got {actual} of {expected_total} bytes")
+   # A complete zstd frame must decode cleanly before it is handed to the parser.
+   with part.open("rb") as compressed:
+    reader=zstandard.ZstdDecompressor().stream_reader(compressed)
+    while reader.read(8*1024*1024):
+     pass
+   part.replace(final)
+   log("replay_download_verified",hour=hour,bytes=actual,attempt=attempt)
+   return final
+  except Exception as exc:
+   last_error=exc
+   log("replay_download_retry",hour=hour,attempt=attempt,error=f"{type(exc).__name__}: {exc}",
+       partialBytes=part.stat().st_size if part.exists() else 0)
+   if attempt<5:
+    import time
+    time.sleep(min(2**attempt,30))
+ if last_error:
+  raise RuntimeError(f"Replay download failed after five attempts for {hour}: {last_error}") from last_error
+ raise RuntimeError(f"Replay download failed for {hour}")
 
 def process_hour(hour,s):
  p=download(hour); h=hashlib.sha256()
