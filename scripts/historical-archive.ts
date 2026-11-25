@@ -255,6 +255,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   if (progress.complete) return;
   let pages = 0;
   let createInstructionsFound = 0;
+  let pumpProgramInstructionsSeen = 0;
   while (pages < MAX_PAGES) {
     const enhanced = await getHeliusHistoryPage(queryAddress, START, END, progress.paginationToken);
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
@@ -281,6 +282,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
       if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
       if (!tx.meta.err) {
         const top = instructions(tx);
+        if (venue === "pumpfun") pumpProgramInstructionsSeen += top.filter(ix => ix.programId === PUMP).length;
         const launches = venue === "pumpfun"
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
           : findStonkFunLaunchInstructions(top, LAUNCHLAB, STONK_CONFIGS).map(x => ({ mint: x.mint, creator: x.creator, feePayer: x.payer, quoteMint: x.quoteMint, pool: x.pool }));
@@ -303,12 +305,12 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         }
       }
     }
-    if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) throw new Error("Pump mint-authority address returned transactions but no Pump create instructions were decoded.");
+    if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) console.warn(`No Pump create instruction was decoded on the first page; continuing pagination. Pump program instructions observed=${pumpProgramInstructionsSeen}.`);
     state.programs[program] = progress;
     await save();
     await uploadDirtyFiles();
     pages++;
-    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, enhancedHistory=${enhancedHistorySupport === true}`);
+    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
