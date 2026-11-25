@@ -34,6 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
+ if s.get("collectorVersion") != 2:
+  s["replayHours"]={}; s["collectorVersion"]=2
  return s
 
 def save(s):
@@ -122,7 +124,7 @@ def summarize(s,r):
     x=json.loads(line)
     if x.get("recordType")=="historical_trade_event": rows.append(x)
  buyers=set(); sellers=set(); vol=defaultdict(lambda:{"buys":0,"sells":0,"buyVolume":0.0,"sellVolume":0.0})
- txfee={}; priority={}; tips={}; prices=[]; buckets=set(); creator_sells=0; early=set(); top=defaultdict(float)
+ txfee={}; priority={}; tips={}; prices=[]; buckets=set(); creator_sells=0; early=set(); top=defaultdict(float); fee_totals=defaultdict(float)
  for x in rows:
   side=x.get("side"); user=x.get("user"); qm=x.get("quoteMint") or "unknown"
   dec=x.get("quoteDecimals"); raw=int(x.get("quoteAmountRaw") or 0)
@@ -139,6 +141,11 @@ def summarize(s,r):
   if sig and isinstance(x.get("transactionFeeLamports"),int): txfee[sig]=x["transactionFeeLamports"]
   if sig and isinstance(x.get("priorityFeeLamports"),int): priority[sig]=x["priorityFeeLamports"]
   if sig and isinstance(x.get("tipLamports"),int): tips[sig]=x["tipLamports"]
+  for fee_name, fee_value in (x.get("fees") or {}).items():
+   if isinstance(fee_value,(int,float)): fee_totals[fee_name]+=float(fee_value)
+   elif isinstance(fee_value,dict):
+    for sub_name,sub_value in fee_value.items():
+     if isinstance(sub_value,(int,float)): fee_totals[f"{fee_name}.{sub_name}"]+=float(sub_value)
   try:
    price=float(x.get("impliedQuotePrice"))
    if price>0: prices.append((int(x.get("blockTime") or 0),int(x.get("slot") or 0),price))
@@ -165,6 +172,7 @@ def summarize(s,r):
    "maxDrawdownPct":dd,"unit":"quote asset per token; not USD"},
   "networkFees":{"uniqueTransactions":len(txfee),"transactionFeeLamports":sum(txfee.values()),
    "priorityFeeLamports":sum(priority.values()),"tipLamports":sum(tips.values())},
+  "protocolAndVenueFees":dict(fee_totals),
   "developerActivity":{"creator":r.get("creator"),"creatorSellEvents":creator_sells,"launchFeePayer":r.get("feePayer")},
   "capture":{"windowSeconds":WINDOW,"transactionHistoryComplete":complete,"complete":False,"researchReady":False,
    "timeCoverage":{"bucketSeconds":10,"bucketCount":60,"observedBuckets":sorted(buckets),
@@ -204,7 +212,7 @@ def process_hour(hour,s):
  p=download(hour); h=hashlib.sha256()
  with p.open("rb") as f:
   for chunk in iter(lambda:f.read(1024*1024),b""): h.update(chunk)
- digest=h.hexdigest(); changed=set(); touched=set(); group=[]; current=None
+ digest=h.hexdigest(); changed=set(); touched=set(); initialized_pages=set(); group=[]; current=None
  counts={"events":0,"launches":0,"trades":0}
  start_hour=datetime.strptime(hour,"%Y/%m/%d/%H").replace(tzinfo=timezone.utc).timestamp()
  end_hour=start_hour+3600
@@ -215,6 +223,8 @@ def process_hour(hour,s):
    ts=int(e.get("timestamp") or 0); off=ts-r["blockTime"]
    if not 0<=off<=WINDOW: continue
    _,td=paths(r); page=td/f"replay-{hour.replace('/','')}.jsonl"
+   if page not in initialized_pages:
+    page.write_text("",encoding="utf-8"); initialized_pages.add(page)
    append(page,[trade_row(r,e,idx)]); changed.add(page.as_posix()); touched.add(mint); counts["trades"]+=1
  try:
   with p.open("rb") as raw:
