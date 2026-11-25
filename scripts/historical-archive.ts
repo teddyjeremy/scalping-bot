@@ -172,7 +172,7 @@ const UPLOAD_BATCH_COINS = Math.max(1, Number(process.env.HISTORY_UPLOAD_BATCH_C
 function coinKeyFromLocalPath(file: string): string | null {
   const parts = file.split("/");
   if (parts[0] === "launches" && parts.length >= 4) {
-    return parts[1] + "/" + parts[3].replace(/\.summary\.json$|\.json$/, "");
+    return parts[1] + "/" + parts[3].replace(/\.screening\.json$|\.summary\.json$|\.json$/, "");
   }
   if (parts[0] === "trades" && parts.length >= 5) return parts[1] + "/" + parts[3];
   return null;
