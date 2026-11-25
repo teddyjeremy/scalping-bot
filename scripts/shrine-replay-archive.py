@@ -34,8 +34,8 @@ def load():
    raise RuntimeError("Checkpoint/date mismatch; refusing to mix collection windows.")
  else: s={"schemaVersion":1,"start":START,"end":END,"programs":{},"launches":{}}
  s.setdefault("replayHours",{}); s.setdefault("launches",{}); s.setdefault("tradeCursors",{})
- if s.get("collectorVersion") != 5:
-  s["replayHours"]={}; s["collectorVersion"]=5
+ if s.get("collectorVersion") != 6:
+  s["replayHours"]={}; s["collectorVersion"]=6
  return s
 
 def save(s):
@@ -188,9 +188,18 @@ def summarize(s,r):
   "dataQuality":{"tradeSource":"public replay event archive","rawEventsRetained":True,
    "failedTransactions":"not supplied by replay stream","walletLabels":"heuristics only; no bot/sniper identity asserted"}}
  dump(ld/f"{r['mint']}.summary.json",summary)
- screen=json.loads((ld/f"{r['mint']}.screening.json").read_text())
+ screen_path=ld/f"{r['mint']}.screening.json"
+ if screen_path.is_file():
+  screen=json.loads(screen_path.read_text())
+ else:
+  screen={"schemaVersion":1,"venue":r["venue"],"mint":r["mint"],"launchSignature":r["signature"],
+   "launchTime":r["blockTime"],"ruleVersion":"initial-security-gate-v1","overallStatus":"unverified",
+   "security":{"status":"unverified","liquidityLockStatus":"unavailable",
+    "reason":"No persisted launch screening snapshot was available during checkpoint recovery; no safety pass is claimed."},
+   "dataQuality":{"source":"checkpoint-recovery","lockedLiquidityHistoricallyVerified":False,
+    "historicalHolderSnapshot":False}}
  screen["behaviouralMetrics"]=summary["tradeEvents"]; screen["overallStatus"]="unverified"
- dump(ld/f"{r['mint']}.screening.json",screen)
+ dump(screen_path,screen)
  return complete
 
 def publish(changed):
