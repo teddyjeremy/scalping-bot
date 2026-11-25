@@ -27,7 +27,7 @@ jobs:
       HISTORY_START: "2026-11-01T00:00:00Z"
       HISTORY_END: "2026-11-02T00:00:00Z"
       DATA_DIR: ./historical-data
-      REPLAY_MAX_HOURS_PER_RUN: "2"
+      REPLAY_MAX_HOURS_PER_RUN: "4"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
