@@ -965,6 +965,16 @@ async function main() {
     }
   }));
   if (await finishBatch(tradeResults)) return;
+  if (dirtyFiles.size > 0) await uploadDirtyFiles(true);
   console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete]))) }`);
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+main().catch(async error => {
+  console.error(error);
+  try {
+    await save();
+    if (dirtyFiles.size > 0) await uploadDirtyFiles(true);
+  } catch (publishError) {
+    console.error("Failed to flush the saved checkpoint or staged coin data after the collector error:", publishError);
+  }
+  process.exitCode = 1;
+});
