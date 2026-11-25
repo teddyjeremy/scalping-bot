@@ -65,7 +65,7 @@ jobs:
           python -m py_compile scripts/hf-dataset-v3-sync.py
           npm test
       - name: DELETE ALL OLD HUGGING FACE DATASET FILES (one-time clean rebuild)
-        if: github.event_name == 'push' && github.sha == '43d2fe553bee81bb48278bf48b7c92399dc62cb8'
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[clean-rebuild]')
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
