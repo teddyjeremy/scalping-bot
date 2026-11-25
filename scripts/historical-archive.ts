@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { findPumpCreateInstructions } from "../src/pump-instructions.js";
+import { decodeBase58, findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
 import { normalizeTransactionInstructions, type CompiledOrParsedInstruction } from "../src/transaction-instructions.js";
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
@@ -285,6 +285,11 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   let pumpProgramInstructionsSeen = 0;
   let signaturesScanned = 0;
   let eligibleSignaturesScanned = 0;
+  let hydratedTransactions = 0;
+  let missingTransactions = 0;
+  let failedTransactions = 0;
+  const pumpDiscriminatorCounts: Record<string, number> = {};
+  console.log(JSON.stringify({ event: "launch_index_start", venue, program, queryAddress, queryAddressType: venue === "pumpfun" ? "derived_pump_mint_authority_pda" : "launchlab_program", startUtc: new Date(START * 1000).toISOString(), endUtcExclusive: new Date(END * 1000).toISOString(), maxPages: MAX_PAGES, pageSize: PAGE_SIZE, historyProvider: enhancedHistorySupport === false ? "standard_solana_rpc_getSignaturesForAddress" : "helius_enhanced" }));
   while (pages < MAX_PAGES) {
     const enhanced = await getHeliusHistoryPage(queryAddress, START, END, progress.paginationToken);
     let hydrated: Array<{ entry: { signature: string; slot: number; blockTime: number | null }; tx: ParsedTransactionWithMeta | null }>;
@@ -303,7 +308,11 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
         progress.complete = true; state.programs[program] = progress; await save(); break;
       }
       signaturesScanned += signatures.length;
+      const pageTimes = signatures.map(entry => entry.blockTime).filter((value): value is number => value != null);
+      const pageNewest = pageTimes.length ? Math.max(...pageTimes) : null;
+      const pageOldest = pageTimes.length ? Math.min(...pageTimes) : null;
       const eligible = signatures.filter(entry => entry.blockTime != null && entry.blockTime >= START && entry.blockTime < END).reverse();
+      console.log(JSON.stringify({ event: "launch_index_page_received", venue, page: pages + 1, queryAddress, cursorBefore: progress.before ?? null, signatures: signatures.length, eligibleInRequestedWindow: eligible.length, blockTimeMissing: signatures.length - pageTimes.length, newestUtc: pageNewest == null ? null : new Date(pageNewest * 1000).toISOString(), oldestUtc: pageOldest == null ? null : new Date(pageOldest * 1000).toISOString(), firstSignature: signatures[0]?.signature ?? null, lastSignature: signatures.at(-1)?.signature ?? null, requestedStartUtc: new Date(START * 1000).toISOString(), requestedEndUtcExclusive: new Date(END * 1000).toISOString() }));
       eligibleSignaturesScanned += eligible.length;
       hydrated = await Promise.all(eligible.map(async entry => ({ entry: { signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime ?? null }, tx: await fetchTx(entry.signature) })));
       progress.before = signatures[signatures.length - 1].signature;
@@ -314,9 +323,24 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     }
     for (const { entry, tx } of hydrated) {
       if (entry.blockTime == null) continue;
-      if (!tx || !tx.meta) throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
+      if (!tx || !tx.meta) {
+        missingTransactions++;
+        console.error(JSON.stringify({ event: "launch_transaction_missing", venue, signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime }));
+        throw new Error(`Missing historical transaction metadata for ${entry.signature}; checkpoint remains on this page.`);
+      }
+      hydratedTransactions++;
       const top = instructions(tx);
-      if (venue === "pumpfun") pumpProgramInstructionsSeen += top.filter(ix => ix.programId === PUMP).length;
+      const venueInstructions = top.filter(ix => ix.programId === (venue === "pumpfun" ? PUMP : LAUNCHLAB));
+      if (venue === "pumpfun") {
+        pumpProgramInstructionsSeen += venueInstructions.length;
+        for (const ix of venueInstructions) {
+          let discriminator = "missing_or_non_base58";
+          if (typeof ix.data === "string") { try { discriminator = [...decodeBase58(ix.data).slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join(""); } catch { /* keep diagnostic label */ } }
+          pumpDiscriminatorCounts[discriminator] = (pumpDiscriminatorCounts[discriminator] ?? 0) + 1;
+        }
+        if (hydratedTransactions <= 8) console.log(JSON.stringify({ event: "pump_transaction_instruction_sample", signature: entry.signature, blockTime: entry.blockTime, txError: tx.meta.err ?? null, instructionCountIncludingInner: top.length, pumpInstructionCount: venueInstructions.length, pumpInstructionSamples: venueInstructions.slice(0, 5).map(ix => ({ discriminator: typeof ix.data === "string" ? (() => { try { return [...decodeBase58(ix.data).slice(0, 8)].map(byte => byte.toString(16).padStart(2, "0")).join(""); } catch { return "invalid_base58"; } })() : "missing_data", accountCount: ix.accounts?.length ?? 0, dataLength: typeof ix.data === "string" ? ix.data.length : null, firstAccounts: (ix.accounts ?? []).slice(0, 10) })) }));
+      }
+      if (tx.meta.err) failedTransactions++;
       if (!tx.meta.err) {
         const launches = venue === "pumpfun"
           ? findPumpCreateInstructions(top, PUMP).map(x => ({ mint: x.mint, creator: x.creator, feePayer: signers(tx)[0] ?? null, quoteMint: "So11111111111111111111111111111111111111112", pool: null }))
@@ -354,7 +378,7 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     }
     const oldestProgress = progress.oldestScannedBlockTime;
     const oldestIso = oldestProgress ? new Date(oldestProgress * 1000).toISOString() : "unknown";
-    console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, signaturesScanned=${signaturesScanned}, eligibleSignatures=${eligibleSignaturesScanned}, oldestScanned=${oldestIso}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
+    console.log(JSON.stringify({ event: "launch_index_page_summary", venue, queryAddress, page: pages, signaturesScannedThisRun: signaturesScanned, eligibleSignaturesScannedThisRun: eligibleSignaturesScanned, hydratedTransactions, missingTransactions, failedTransactions, venueProgramInstructionsSeen: venue === "pumpfun" ? pumpProgramInstructionsSeen : null, venueInstructionDiscriminators: venue === "pumpfun" ? pumpDiscriminatorCounts : undefined, createInstructionsFoundThisRun: createInstructionsFound, totalLaunchesArchived: Object.keys(state.launches).length, oldestScannedUtc: oldestIso, cursorComplete: progress.complete, historyProvider: enhancedHistorySupport === false ? "standard_solana_rpc_getSignaturesForAddress" : "helius_enhanced" }));
     if (progress.complete) break;
   }
   state.programs[program] = progress;
@@ -422,6 +446,7 @@ async function verifyAndPersistStonkFunLaunch(row: LaunchLabIndexRow, platformCo
     const candidates = signatures.filter(entry =>
       entry.blockTime != null && Math.abs(entry.blockTime - expectedBlockTime) <= 30
     );
+    console.log(JSON.stringify({ event: "launchlab_mint_verification_page", mint, platformConfig, expectedLaunchUtc: new Date(expectedBlockTime * 1000).toISOString(), pageNumber, signatures: signatures.length, matchingTimestampCandidates: candidates.length, newestUtc: signatures[0]?.blockTime == null ? null : new Date(signatures[0].blockTime * 1000).toISOString(), oldestUtc: signatures.at(-1)?.blockTime == null ? null : new Date(signatures.at(-1)!.blockTime! * 1000).toISOString() }));
     for (const entry of candidates) {
       const tx = await fetchTx(entry.signature);
       if (!tx?.meta) throw new Error(`Missing transaction metadata for StonkFun mint ${mint} signature ${entry.signature}; page cursor remains unchanged.`);
@@ -487,6 +512,10 @@ async function scanStonkFunIndex() {
       }
 
       const timestamps = page.rows.map(row => Number(row.createAt));
+      const validTimes = timestamps.filter(Number.isFinite);
+      const pageNewest = validTimes.length ? Math.max(...validTimes) : null;
+      const pageOldest = validTimes.length ? Math.min(...validTimes) : null;
+      console.log(JSON.stringify({ event: "launchlab_index_page_received", platformConfig, page: progress.pages + 1, rows: page.rows.length, newestCreateAt: pageNewest == null ? null : new Date(pageNewest).toISOString(), oldestCreateAt: pageOldest == null ? null : new Date(pageOldest).toISOString(), rowsInRequestedWindow: validTimes.filter(value => value >= START * 1000 && value < END * 1000).length, nextPageIdPresent: Boolean(page.nextPageId), requestedStartUtc: new Date(START * 1000).toISOString(), requestedEndUtcExclusive: new Date(END * 1000).toISOString() }));
       if (timestamps.some(value => !Number.isFinite(value))) {
         throw new Error(`StonkFun LaunchLab index page contains a row without createAt for config ${platformConfig}.`);
       }
@@ -946,7 +975,7 @@ async function finishBatch(results: PromiseSettledResult<unknown>[]) {
 async function main() {
   if (!(START < END)) throw new Error("HISTORY_START must be earlier than HISTORY_END.");
   await load();
-  console.log(`Historical research archive only. Window ${new Date(START * 1000).toISOString()} to ${new Date(END * 1000).toISOString()}. No trading or order submission. RPC pacing per key: ${MIN_RPC_INTERVAL_MS}ms.`);
+  console.log(JSON.stringify({ event: "collector_start", windowStartUtc: new Date(START * 1000).toISOString(), windowEndUtcExclusive: new Date(END * 1000).toISOString(), rpcKeysConfigured: keys.length, rpcPacingMsPerKey: MIN_RPC_INTERVAL_MS, enhancedHistoryEnabled: enhancedHistorySupport !== false, pumpProgram: PUMP, pumpMintAuthorityPda: PUMP_MINT_AUTHORITY, launchlabProgram: LAUNCHLAB, stonkFunConfigs: [...STONK_CONFIGS], maxPumpPagesPerRun: MAX_PAGES, maxLaunchLabPagesPerConfigPerRun: MAX_LAUNCHLAB_PAGES }));
   // One coordinator owns checkpoint and Hub commits. Transaction hydration still
   // fans out requests across the three independently paced Helius keys.
   if (process.env.HISTORY_SKIP_PUMP_INDEX === "true") {
@@ -983,7 +1012,9 @@ async function main() {
   }));
   if (await finishBatch(tradeResults)) return;
   if (dirtyFiles.size > 0) await uploadDirtyFiles(true);
-  console.log(`Historical pass complete for this run. Launches indexed: ${Object.keys(state.launches).length}. Program scan completion: ${JSON.stringify(Object.fromEntries(Object.entries(state.programs).map(([k,v]) => [k,v.complete]))) }`);
+  const totalLaunches = Object.keys(state.launches).length;
+  console.log(JSON.stringify({ event: "historical_pass_finished", launchesIndexed: totalLaunches, pumpCursor: state.programs[PUMP] ?? null, launchLabCursors: state.launchLabIndexes, tradeMintsWithCursors: Object.keys(state.tradeCursors ?? {}).length, warning: totalLaunches === 0 ? "ZERO_LAUNCHES_DISCOVERED: inspect page timestamps, index address, instruction samples, and LaunchLab diagnostics." : null }));
+  if (totalLaunches === 0) console.error("ZERO_LAUNCHES_DISCOVERED: this run did not collect any coin records.");
 }
 main().catch(async error => {
   console.error(error);
