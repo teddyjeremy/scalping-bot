@@ -1,0 +1,82 @@
+name: StonkFun-only partial historical archive
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/historical-archive.ts"
+      - ".github/workflows/stonkfun-partial-archive.yml"
+
+concurrency:
+  group: historical-solana-archive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HELIUS_API_KEY_1: ${{ secrets.HELIUS_API_KEY_1 }}
+      HELIUS_API_KEY_2: ${{ secrets.HELIUS_API_KEY_2 }}
+      HELIUS_API_KEY_3: ${{ secrets.HELIUS_API_KEY_3 }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HISTORY_START: "2026-11-01T00:00:00Z"
+      HISTORY_END: "2026-11-24T00:00:00Z"
+      HISTORY_MAX_PAGES_PER_RUN: "2"
+      HISTORY_MAX_LAUNCHLAB_PAGES_PER_RUN: "5"
+      HISTORY_MAX_TRADE_COINS_PER_RUN: "3"
+      HISTORY_SKIP_PUMP_INDEX: "true"
+      DATA_DIR: ./historical-data
+      HELIUS_RPC_MIN_INTERVAL_MS: "2000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/cache@v4
+        with:
+          path: historical-data
+          key: stonkfun-partial-archive-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            stonkfun-partial-archive-
+            historical-archive-
+      - name: Validate secrets and date range
+        shell: bash
+        run: |
+          test -n "$HELIUS_API_KEY_1" || { echo "::error::Missing HELIUS_API_KEY_1"; exit 1; }
+          test -n "$HELIUS_API_KEY_2" || { echo "::error::Missing HELIUS_API_KEY_2"; exit 1; }
+          test -n "$HELIUS_API_KEY_3" || { echo "::error::Missing HELIUS_API_KEY_3"; exit 1; }
+          test -n "$HF_TOKEN" || { echo "::error::Missing HF_TOKEN"; exit 1; }
+      - name: Install dependencies
+        run: npm install
+      - name: Install Hugging Face client
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Typecheck and test
+        run: |
+          npm run typecheck
+          npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/historical-archive.ts
+          python -m py_compile scripts/hf-dataset-v3-sync.py
+          npm test
+      - name: Restore previous archive and checkpoint from Hugging Face
+        run: python scripts/hf-dataset-v3-sync.py restore
+      - name: Verify Hugging Face dataset write access and clean up test file
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python scripts/hf-dataset-v3-sync.py write-test
+      - name: Collect verified StonkFun launches and bounded first-ten-minute trade samples
+        timeout-minutes: 50
+        run: npm run historical:archive
+      - name: Publish resumable archive to Hugging Face
+        if: always()
+        run: python scripts/hf-dataset-v3-sync.py publish-batch
+      - name: Preserve run output as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stonkfun-partial-archive-${{ github.run_id }}
+          path: historical-data/
+          if-no-files-found: warn
+          retention-days: 30
