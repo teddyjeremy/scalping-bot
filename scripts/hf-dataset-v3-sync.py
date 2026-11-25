@@ -20,6 +20,9 @@ if not TOKEN:
 API = HfApi(token=TOKEN)
 ROOT = Path(os.environ.get("DATA_DIR", "./historical-data"))
 REMOTE_ROOT = "dataset_v3"
+START_DAY = os.environ.get("HISTORY_START", "2026-11-01T00:00:00Z")[:10]
+END_DAY = os.environ.get("HISTORY_END", "2026-11-24T00:00:00Z")[:10]
+CHECKPOINT_REMOTE = f"{REMOTE_ROOT}/control/checkpoints/{START_DAY}_{END_DAY}.json"
 
 
 def now():
@@ -273,7 +276,7 @@ def publish_batch(paths):
         publish_coin(venue, mint, changed)
     checkpoint = ROOT / "checkpoint.json"
     if checkpoint.is_file():
-        upload_verified(f"{REMOTE_ROOT}/control/checkpoint.json", checkpoint.read_bytes(), "Publish resumable collection checkpoint")
+        upload_verified(CHECKPOINT_REMOTE, checkpoint.read_bytes(), f"Publish resumable collection checkpoint {START_DAY}..{END_DAY}")
     flush_staged()
     if not grouped:
         print("No coin files changed; checkpoint refreshed if present.")
@@ -296,7 +299,7 @@ def restore():
             return
         raise
     base = snapshot / REMOTE_ROOT
-    cp = base / "control" / "checkpoint.json"
+    cp = snapshot / CHECKPOINT_REMOTE
     if cp.is_file():
         shutil.copy2(cp, ROOT / "checkpoint.json")
     raw = base / "raw"
@@ -317,12 +320,15 @@ def restore():
                         mint = mint_dir.name
                         launch = mint_dir / "launch.json"
                         summary = mint_dir / "summary.json"
+                        screening = mint_dir / "screening.json"
                         local_launch_dir = ROOT / "launches" / venue / shard_dir.name
                         local_launch_dir.mkdir(parents=True, exist_ok=True)
                         if launch.is_file():
                             shutil.copy2(launch, local_launch_dir / f"{mint}.json")
                         if summary.is_file():
                             shutil.copy2(summary, local_launch_dir / f"{mint}.summary.json")
+                        if screening.is_file():
+                            shutil.copy2(screening, local_launch_dir / f"{mint}.screening.json")
                         page_dir = ROOT / "trades" / venue / shard_dir.name / mint
                         pages = mint_dir / "transaction_pages"
                         if pages.exists():
