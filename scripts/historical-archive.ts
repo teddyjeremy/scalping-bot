@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { findPumpCreateInstructions } from "../src/pump-instructions.js";
 import { findStonkFunLaunchInstructions } from "../src/launchlab-instructions.js";
+import { normalizeTransactionInstructions, type CompiledOrParsedInstruction } from "../src/transaction-instructions.js";
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
 import { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "../src/wallet-analytics.js";
@@ -204,14 +205,13 @@ function keyString(value: unknown): string {
   if (value && typeof value === "object" && "toBase58" in value && typeof (value as {toBase58?: unknown}).toBase58 === "function") return (value as {toBase58: () => string}).toBase58();
   return String(value ?? "");
 }
-function instructions(tx: ParsedTransactionWithMeta) {
-  const convert = (ix: unknown) => {
-    const item = ix as { programId?: unknown; data?: unknown; accounts?: unknown[] };
-    return { programId: keyString(item.programId), data: item.data, accounts: Array.isArray(item.accounts) ? item.accounts.map(keyString) : [] };
+function instructions(tx: ParsedTransactionWithMeta): CompiledOrParsedInstruction[] {
+  const message = tx.transaction.message as unknown as {
+    accountKeys: readonly unknown[];
+    instructions: readonly CompiledOrParsedInstruction[];
   };
-  const topLevel = tx.transaction.message.instructions.map(convert);
-  const inner = (tx.meta?.innerInstructions ?? []).flatMap(group => group.instructions.map(convert));
-  return [...topLevel, ...inner];
+  const inner = (tx.meta?.innerInstructions ?? []) as unknown as Array<{ instructions: readonly CompiledOrParsedInstruction[] }>;
+  return normalizeTransactionInstructions(message, inner);
 }
 async function fetchTx(signature: string): Promise<ParsedTransactionWithMeta | null> {
   return rpc("getParsedTransaction", connection => connection.getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 }));
