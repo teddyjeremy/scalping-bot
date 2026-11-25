@@ -899,7 +899,7 @@ async function buildMintResearchSummary(record: Cursor["launches"][string]) {
     note: "Behavioural windows are computed only from events at or before each window. Security remains unverified until historical state evidence is available."
   };
   const screeningFile = launchRecordPath(record, ".screening.json");
-  await writeFile(screeningFile, JSON.stringify(screening, null, 2) + "\\n");
+  await writeFile(screeningFile, JSON.stringify(screening, null, 2) + "\n");
   queueDirtyFile(screeningFile);
 }
 async function summaryNeedsRefresh(record: Cursor["launches"][string]): Promise<boolean> {
