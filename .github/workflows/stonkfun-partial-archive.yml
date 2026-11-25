@@ -13,7 +13,7 @@ on:
 
 concurrency:
   group: historical-solana-archive
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
