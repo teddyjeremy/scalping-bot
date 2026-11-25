@@ -1,6 +1,8 @@
 name: Solana historical archive - Pump.fun and StonkFun
 
 on:
+  schedule:
+    - cron: "17 * * * *"
   push:
     branches: [main]
     paths:
@@ -31,7 +33,7 @@ jobs:
       HISTORY_UPLOAD_BATCH_COINS: "5"
       HISTORY_UPLOAD_EVERY_PAGES: "20"
       HISTORY_MAX_LAUNCHLAB_PAGES_PER_RUN: "5"
-      HISTORY_MAX_TRADE_COINS_PER_RUN: "0"
+      HISTORY_MAX_TRADE_COINS_PER_RUN: "100"
       HISTORY_DISCOVERY_ONLY: "false"
       HISTORY_SKIP_PUMP_INDEX: "false"
       DATA_DIR: ./historical-data
