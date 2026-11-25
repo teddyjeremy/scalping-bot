@@ -1,0 +1,27 @@
+name: Import external Pump.fun research supplement
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/import-loopholetape-supplement.py"
+      - ".github/workflows/import-loopholetape-supplement.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Hugging Face client
+        run: python -m pip install --upgrade huggingface_hub
+      - name: Import and verify external source files
+        run: python scripts/import-loopholetape-supplement.py
