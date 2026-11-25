@@ -1,0 +1,58 @@
+name: Resume November 1 replay collection
+
+on:
+  push:
+    paths:
+      - ".github/workflows/resume-nov1-replay.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: nov1-replay-collection
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HISTORY_START: "2026-11-01T00:00:00Z"
+      HISTORY_END: "2026-11-02T00:00:00Z"
+      DATA_DIR: ./historical-data
+      REPLAY_MAX_HOURS_PER_RUN: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install replay and Hugging Face dependencies
+        run: python -m pip install --upgrade requests zstandard huggingface_hub
+      - name: Validate publisher and collector syntax
+        run: |
+          python -m py_compile scripts/hf-dataset-v3-sync.py scripts/shrine-replay-archive.py
+      - name: Verify Hugging Face write/read access
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python scripts/hf-dataset-v3-sync.py write-test
+      - name: Restore existing dataset and resumable checkpoint
+        run: python scripts/hf-dataset-v3-sync.py restore
+      - name: Resume all remaining November 1 UTC replay hours
+        timeout-minutes: 330
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2 3 4 5 6 7 8; do
+            echo "===== Resumable collection pass ${pass}/8 ====="
+            python scripts/shrine-replay-archive.py
+          done
+      - name: Preserve local checkpoint and data artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nov1-replay-resume-${{ github.run_id }}
+          path: historical-data/
+          if-no-files-found: warn
+          retention-days: 30
