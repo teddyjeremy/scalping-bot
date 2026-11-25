@@ -87,12 +87,15 @@ def local_coin_files(venue: str, mint: str):
     shard, shard4 = mint_parts(venue, mint)
     launch = ROOT / "launches" / venue / shard / f"{mint}.json"
     summary = ROOT / "launches" / venue / shard / f"{mint}.summary.json"
+    screening = ROOT / "launches" / venue / shard / f"{mint}.screening.json"
     trades = ROOT / "trades" / venue / shard / mint
     files = []
     if launch.is_file():
         files.append(("launch", launch, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/launch.json"))
     if summary.is_file():
         files.append(("summary", summary, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/summary.json"))
+    if screening.is_file():
+        files.append(("screening", screening, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/screening.json"))
     if trades.is_dir():
         for file in sorted(trades.glob("*.jsonl")):
             files.append(("trade_page", file, f"{REMOTE_ROOT}/raw/{venue}/{shard}/{shard4}/{mint}/transaction_pages/{file.name}"))
@@ -260,7 +263,7 @@ def publish_batch(paths):
         # launches/<venue>/<shard>/<mint>[.summary].json or trades/<venue>/<shard>/<mint>/<page>.jsonl
         if len(parts) >= 4 and parts[0] == "launches":
             venue, filename = parts[1], parts[3]
-            mint = filename.removesuffix(".summary.json").removesuffix(".json")
+            mint = filename.removesuffix(".screening.json").removesuffix(".summary.json").removesuffix(".json")
         elif len(parts) >= 5 and parts[0] == "trades":
             venue, mint = parts[1], parts[3]
         else:
