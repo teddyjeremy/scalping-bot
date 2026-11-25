@@ -163,6 +163,8 @@ const tradeRecordDirectory = (record: { venue: string; mint: string }) => path.j
 let state: Cursor = { schemaVersion: 1, start: START, end: END, programs: {}, tradeCursors: {}, launchLabIndexes: {}, launches: {} };
 let saveQueue: Promise<void> = Promise.resolve();
 let uploadQueue: Promise<void> = Promise.resolve();
+let pagesSinceUpload = 0;
+const UPLOAD_EVERY_PAGES = Math.max(1, Number(process.env.HISTORY_UPLOAD_EVERY_PAGES ?? 20));
 const dirtyFiles = new Set<string>();
 function queueDirtyFile(file: string) { dirtyFiles.add(path.relative(path.resolve(ROOT), path.resolve(file)).replaceAll(path.sep, "/")); }
 async function uploadDirtyFiles() {
@@ -245,7 +247,7 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   queueDirtyFile(file);
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
-  const queryAddress = venue === "pumpfun" ? PUMP_MINT_AUTHORITY : program;
+  const queryAddress = program;
   let progress = state.programs[program] ?? { complete: false };
   if ((progress.address && progress.address !== queryAddress) || (venue === "pumpfun" && !progress.address)) {
     progress = { complete: false, address: queryAddress };
@@ -308,13 +310,21 @@ async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
     if (venue === "pumpfun" && pages === 0 && createInstructionsFound === 0) console.warn(`No Pump create instruction was decoded on the first page; continuing pagination. Pump program instructions observed=${pumpProgramInstructionsSeen}.`);
     state.programs[program] = progress;
     await save();
-    await uploadDirtyFiles();
     pages++;
+    pagesSinceUpload++;
+    if (pagesSinceUpload >= UPLOAD_EVERY_PAGES) {
+      await uploadDirtyFiles();
+      pagesSinceUpload = 0;
+    }
     console.log(`Historical ${venue} launch index ${queryAddress}: page ${pages}/${MAX_PAGES}, launches archived=${Object.keys(state.launches).length}, pageCreateInstructions=${createInstructionsFound}, pumpProgramInstructionsSeen=${pumpProgramInstructionsSeen}, enhancedHistory=${enhancedHistorySupport === true}`);
     if (progress.complete) break;
   }
   state.programs[program] = progress;
   await save();
+  if (pagesSinceUpload > 0) {
+    await uploadDirtyFiles();
+    pagesSinceUpload = 0;
+  }
 }
 type LaunchLabIndexRow = {
   mint?: string;
@@ -892,6 +902,7 @@ async function main() {
   const stonkScan = await Promise.allSettled([scanStonkFunIndex()]);
   if (await finishBatch(stonkScan)) return;
   if (process.env.HISTORY_DISCOVERY_ONLY === "true") {
+    if (pagesSinceUpload > 0) await uploadDirtyFiles();
     console.log(`Launch indexing only. Detailed trade capture is paused until the historical initial-screen stage is enabled. Launches indexed: ${Object.keys(state.launches).length}.`);
     return;
   }
