@@ -10,6 +10,7 @@ import { normalizeTransactionInstructions, type CompiledOrParsedInstruction } fr
 import { decodeProgramTradeEvents } from "../src/trade-events.js";
 import { findLaunchLabCpmmMigration, findPumpSwapPoolFromInstructions } from "../src/pool-state.js";
 import { extractFundingSources, summarizeWalletCohorts, updateWalletProfile, type WalletProfile } from "../src/wallet-analytics.js";
+import { evaluateInitialScreen } from "../src/initial-screen.js";
 
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const LAUNCHLAB = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
@@ -261,6 +262,10 @@ async function writeLaunch(record: Cursor["launches"][string], tx: ParsedTransac
   };
   await writeFile(file, JSON.stringify(payload) + "\n");
   queueDirtyFile(file);
+  const screeningFile = launchRecordPath(record, ".screening.json");
+  const screening = evaluateInitialScreen({});
+  await writeFile(screeningFile, JSON.stringify({ ...screening, venue: record.venue, mint: record.mint, launchSignature: record.signature, launchTime: record.blockTime }, null, 2) + "\n");
+  queueDirtyFile(screeningFile);
 }
 async function scanProgram(program: string, venue: "pumpfun" | "stonkfun") {
   const queryAddress = program;
